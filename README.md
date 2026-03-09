@@ -1,10 +1,17 @@
 # mtgjson-sdk
 
+// TODO: Change this to `A Postgres-backed TypeScript query client...`
 A DuckDB-backed TypeScript query client for [MTGJSON](https://mtgjson.com) card data. Auto-downloads Parquet data from the MTGJSON CDN and exposes the full Magic: The Gathering dataset through a fully-typed async API.
 
-## Install
+## Install (After Compiling)
 
-TODO: NPM STUFF
+```js
+// In MTGJSON-SDK-POSTGRESS
+npm run build && npm pack
+
+// In the App:
+npm install ../mtgjson-sdk-postgres/mtgjson-sdk-0.1.0.tgz
+```
 
 ## Quick Start
 
@@ -19,9 +26,7 @@ console.log(`Found ${bolts.length} printings of Lightning Bolt`);
 
 // Get a specific set
 const mh3 = await sdk.sets.get("MH3");
-if (mh3) {
-  console.log(`${mh3.name} -- ${mh3.totalSetSize} cards`);
-}
+if (mh3) { console.log(`${mh3.name} -- ${mh3.totalSetSize} cards`); }
 
 // Check format legality
 const isLegal = await sdk.legalities.isLegal(bolts[0].uuid, "modern");
@@ -29,9 +34,7 @@ console.log(`Modern legal: ${isLegal}`);
 
 // Find the cheapest printing
 const cheapest = await sdk.prices.cheapestPrinting("Lightning Bolt");
-if (cheapest) {
-  console.log(`Cheapest: $${cheapest.price} (${cheapest.setCode})`);
-}
+if (cheapest) { console.log(`Cheapest: $${cheapest.price} (${cheapest.setCode})`); }
 
 // Raw SQL for anything else
 const rows = await sdk.sql("SELECT name, manaValue FROM cards WHERE manaValue = $1 LIMIT 5", [0]);
@@ -90,22 +93,10 @@ const aggroCreatures = await sdk.cards.search({
 const banned = await sdk.legalities.bannedIn("modern");
 console.log(`${banned.length} cards banned in Modern`);
 
-// Search by keyword ability
-const flyers = await sdk.cards.search({
-  keyword: "Flying",
-  colors: ["W", "U"],
-  legalIn: "standard",
-});
 
-// Fuzzy search -- handles typos
-const results = await sdk.cards.search({
-  fuzzyName: "Ligtning Bolt", // still finds it!
-});
-
-// Find cards by foreign-language name
-const blitz = await sdk.cards.search({
-  localizedName: "Blitzschlag", // German for Lightning Bolt
-});
+const flyers = await sdk.cards.search({ keyword: "Flying", colors: ["W", "U"], legalIn: "standard" }); // Search by keyword ability
+const results = await sdk.cards.search({  fuzzyName: "Ligtning Bolt" }); // Fuzzy search -- handles typos, still finds it!
+const blitz = await sdk.cards.search({ localizedName: "Blitzschlag" }); // German for Lightning Bolt
 
 await sdk.close();
 ```
@@ -520,6 +511,8 @@ Typed TypeScript API (interfaces / Record<string, unknown>)
 - TypeScript 5+
 
 ### Setup
+
+Hmm---the actual url is https://github.com/mtgjson/mtgjson-sdk-typescript It being under "the-muppet2" kind of tells you who it is for.
 
 ```bash
 git clone https://github.com/the-muppet2/mtgjson-sdk-typescript.git

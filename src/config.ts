@@ -46,12 +46,7 @@ export const META_URL = `${CDN_BASE}/Meta.json`;
 export function defaultCacheDir(): string {
 	const sys = platform();
 	let base: string;
-	if (sys === "win32") {
-		base = join(homedir(), "AppData", "Local");
-	} else if (sys === "darwin") {
-		base = join(homedir(), "Library", "Caches");
-	} else {
-		base = join(homedir(), ".cache");
-	}
-	return join(base, "mtgjson-sdk");
+	if (sys === "win32") { base = join(homedir(), "AppData", "Local"); }
+  else if (sys === "darwin") { base = join(homedir(), "Library", "Caches"); }
+  else { base = join(homedir(), ".cache"); } return join(base, "mtgjson-sdk");
 }

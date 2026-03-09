@@ -8,72 +8,28 @@ export class SealedQuery {
 		this._conn = conn;
 	}
 
-	private async _ensure(): Promise<void> {
-		await this._conn.ensureViews("sets");
-	}
-
 	async list(options?: {
 		setCode?: string;
 		category?: string;
 		limit?: number;
 	}): Promise<Record<string, unknown>[]> {
-		await this._ensure();
-		try {
-			const q = new SQLBuilder("sets");
-			q.select("code", "name AS setName", "sealedProduct");
+		const q = new SQLBuilder("sealed_product");
 
-			if (options?.setCode) {
-				q.whereEq("code", options.setCode.toUpperCase());
-			}
-			q.limit(options?.limit ?? 100);
+		if (options?.setCode) q.whereEq("set_code", options.setCode.toUpperCase());
+		if (options?.category) q.whereEq("category", options.category);
 
-			const [sql, params] = q.build();
-			const rows = await this._conn.execute(sql, params);
+		q.orderBy("set_code ASC", "name ASC");
+		q.limit(options?.limit ?? 100);
 
-			const products: Record<string, unknown>[] = [];
-			for (const row of rows) {
-				const sealed = row.sealedProduct;
-				if (sealed && Array.isArray(sealed)) {
-					for (const sp of sealed) {
-						if (sp && typeof sp === "object") {
-							const product = sp as Record<string, unknown>;
-							if (options?.category && product.category !== options.category) {
-								continue;
-							}
-							product.setCode = row.code;
-							products.push(product);
-						}
-					}
-				}
-			}
-			return products;
-		} catch {
-			return [];
-		}
+		const [sql, params] = q.build();
+		return this._conn.execute(sql, params);
 	}
 
 	async get(uuid: string): Promise<Record<string, unknown> | null> {
-		await this._ensure();
-		try {
-			const sql =
-				"SELECT sub.code AS setCode, sub.sp " +
-				"FROM (" +
-				"  SELECT code, UNNEST(sealedProduct) AS sp " +
-				"  FROM sets WHERE sealedProduct IS NOT NULL" +
-				") sub " +
-				"WHERE sub.sp.uuid = $1 " +
-				"LIMIT 1";
-			const rows = await this._conn.execute(sql, [uuid]);
-			if (rows.length === 0) return null;
-			const row = rows[0];
-			const product = (row.sp ?? {}) as Record<string, unknown>;
-			if (typeof product === "object") {
-				product.setCode = row.setCode;
-				return product;
-			}
-			return null;
-		} catch {
-			return null;
-		}
+		const rows = await this._conn.execute(
+			"SELECT * FROM sealed_product WHERE uuid = $1 LIMIT 1",
+			[uuid],
+		);
+		return rows[0] ?? null;
 	}
 }

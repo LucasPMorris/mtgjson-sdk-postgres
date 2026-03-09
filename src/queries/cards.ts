@@ -2,19 +2,156 @@ import type { Connection } from "../connection.js";
 import { SQLBuilder } from "../sql-builder.js";
 import type { CardAtomic, CardSet } from "../types/index.js";
 
+const KNOWN_FORMATS = new Set([ "alchemy",   "brawl",   "commander",       "duel",  "explorer",  "future",  "gladiator",  "historic",  "historicbrawl",  "legacy",   "modern", 	"oathbreaker",
+                                "oldschool", "pauper",  "paupercommander", "penny",	"pioneer",   "predh",   "premodern",  "standard",  "standardbrawl",	 "timeless", "vintage" ]);
+
+type KeywordOperator = "All" | "Any" | "Exact";
+
+type SearchOptions = {
+	name?: string;
+	localizedName?: string;
+	setCode?: string;
+	colors?: string[];
+	colorIdentity?: string[];
+	types?: string;
+	rarity?: string;
+	legalIn?: string;
+	manaValue?: number;
+	manaValueLte?: number;
+	manaValueGte?: number;
+	text?: string;
+	textRegex?: string;
+	power?: string;
+	toughness?: string;
+	artist?: string;
+	keywordAbilities?: string[];
+	keywordActions?: string[];
+	keywordOperator?: KeywordOperator;
+	isPromo?: boolean;
+	isOversized?: boolean;
+	isOnlineOnly?: boolean;
+	isToken?: boolean;
+	isArtSeries?: boolean;
+	availability?: string;
+	language?: string;
+	layout?: string;
+	setType?: string;
+	limit?: number;
+	offset?: number;
+};
+
 export class CardQuery {
 	private _conn: Connection;
 
-	constructor(conn: Connection) {
-		this._conn = conn;
+	constructor(conn: Connection) {	this._conn = conn; }
+
+	private _applyKeywordFilter(q: SQLBuilder, keywords: string[], op: KeywordOperator): void {
+		if (keywords.length === 0) return;
+		if (op === "Any") {
+			const parts = keywords.map(kw => {
+				const idx = q._params.length + 1;
+				q._params.push(kw);
+				return `$${idx} = ANY(keywords)`;
+			});
+			q._where.push(`(${parts.join(" OR ")})`);
+		} else if (op === "All") {
+			for (const kw of keywords) {
+				const idx = q._params.length + 1;
+				q._params.push(kw);
+				q._where.push(`$${idx} = ANY(keywords)`);
+			}
+		} else {
+			// Exact: keywords array must contain exactly the specified values
+			const idx = q._params.length + 1;
+			q._params.push(keywords);
+			q._where.push(`keywords @> $${idx}::text[] AND keywords <@ $${idx}::text[]`);
+		}
 	}
 
-	private async _ensure(): Promise<void> {
-		await this._conn.ensureViews("cards");
+	/** Applies all search filter conditions to the given SQLBuilder. */
+	private _applyFilters(q: SQLBuilder, opts: SearchOptions): void {
+		if (opts.name) {
+			if (opts.name.includes("%")) {
+				q.whereLike("name", opts.name);
+			} else {
+				q.whereEq("name", opts.name);
+			}
+		}
+		if (opts.setCode) q.whereEq("set_code", opts.setCode);
+		if (opts.rarity) q.whereEq("rarity", opts.rarity);
+		if (opts.manaValue !== undefined) q.whereEq("mana_value", opts.manaValue);
+		if (opts.manaValueLte !== undefined) q.whereLte("mana_value", opts.manaValueLte);
+		if (opts.manaValueGte !== undefined) q.whereGte("mana_value", opts.manaValueGte);
+		if (opts.text) q.whereLike("text", `%${opts.text}%`);
+		if (opts.textRegex) q.whereRegex("text", opts.textRegex);
+		if (opts.types) q.whereLike("type", `%${opts.types}%`);
+		if (opts.power) q.whereEq("power", opts.power);
+		if (opts.toughness) q.whereEq("toughness", opts.toughness);
+		if (opts.artist) q.whereLike("artist", `%${opts.artist}%`);
+		if (opts.language) q.whereEq("language", opts.language);
+		if (opts.layout) q.whereEq("layout", opts.layout);
+		// Boolean include filters — excluded by default; enabling lifts the exclusion
+		if (opts.isPromo !== true)     q._where.push("(is_promo IS NULL OR is_promo = FALSE)");
+		if (opts.isOversized !== true)  q._where.push("(is_oversized IS NULL OR is_oversized = FALSE)");
+		if (opts.isOnlineOnly !== true) q._where.push("(is_online_only IS NULL OR is_online_only = FALSE)");
+
+		// Layout-based include filters — excluded by default; only applied when layout is not explicitly set
+		if (!opts.layout) {
+			const layoutExcludes: string[] = [];
+			if (opts.isToken !== true)    layoutExcludes.push("token");
+			if (opts.isArtSeries !== true) layoutExcludes.push("art_series");
+			if (layoutExcludes.length > 0) {
+				const placeholders = layoutExcludes.map((_, i) => `$${q._params.length + i + 1}`).join(", ");
+				q._where.push(`layout NOT IN (${placeholders})`);
+				q._params.push(...layoutExcludes);
+			}
+		}
+
+		for (const color of opts.colors ?? []) {
+			const idx = q._params.length + 1;
+			q._where.push(`$${idx} = ANY(colors)`);
+			q._params.push(color);
+		}
+		for (const color of opts.colorIdentity ?? []) {
+			const idx = q._params.length + 1;
+			q._where.push(`$${idx} = ANY(color_identity)`);
+			q._params.push(color);
+		}
+
+		// Keyword filters with operator support
+		const op: KeywordOperator = opts.keywordOperator ?? "Any";
+		this._applyKeywordFilter(q, opts.keywordAbilities ?? [], op);
+		this._applyKeywordFilter(q, opts.keywordActions ?? [], op);
+
+		if (opts.availability) {
+			const idx = q._params.length + 1;
+			q._where.push(`$${idx} = ANY(availability)`);
+			q._params.push(opts.availability);
+		}
+
+		if (opts.localizedName) {
+			q.select("cards.*");
+			q.join("JOIN card_foreign_data cfd ON cards.uuid = cfd.uuid");
+			if (opts.localizedName.includes("%")) {	q.whereLike("cfd.name", opts.localizedName); } 
+      else { q.whereEq("cfd.name", opts.localizedName); }
+		}
+
+		if (opts.legalIn) {
+			const fmt = opts.legalIn.toLowerCase();
+			if (KNOWN_FORMATS.has(fmt)) {
+				q.join("JOIN card_legalities cl ON cards.uuid = cl.uuid");
+				q._where.push(`cl.${fmt} = 'Legal'`);
+			}
+		}
+
+		if (opts.setType) {
+			q.select("cards.*");
+			q.join("JOIN sets s ON cards.set_code = s.code");
+			q.whereEq("s.type", opts.setType);
+		}
 	}
 
 	async getByUuid(uuid: string): Promise<CardSet | null> {
-		await this._ensure();
 		const rows = await this._conn.execute(
 			"SELECT * FROM cards WHERE uuid = $1",
 			[uuid],
@@ -24,7 +161,6 @@ export class CardQuery {
 
 	async getByUuids(uuids: string[]): Promise<CardSet[]> {
 		if (uuids.length === 0) return [];
-		await this._ensure();
 		const q = new SQLBuilder("cards").whereIn("uuid", uuids);
 		const [sql, params] = q.build();
 		return (await this._conn.execute(sql, params)) as CardSet[];
@@ -34,203 +170,49 @@ export class CardQuery {
 		name: string,
 		options?: { setCode?: string },
 	): Promise<CardSet[]> {
-		await this._ensure();
 		const q = new SQLBuilder("cards").whereEq("name", name);
-		if (options?.setCode) q.whereEq("setCode", options.setCode);
-		q.orderBy("setCode DESC", "number ASC");
+		if (options?.setCode) q.whereEq("set_code", options.setCode);
+		q.orderBy("set_code DESC", "number ASC");
 		const [sql, params] = q.build();
 		return (await this._conn.execute(sql, params)) as CardSet[];
 	}
 
-	async search(options?: {
-		name?: string;
-		fuzzyName?: string;
-		localizedName?: string;
-		setCode?: string;
-		colors?: string[];
-		colorIdentity?: string[];
-		types?: string;
-		rarity?: string;
-		legalIn?: string;
-		manaValue?: number;
-		manaValueLte?: number;
-		manaValueGte?: number;
-		text?: string;
-		textRegex?: string;
-		power?: string;
-		toughness?: string;
-		artist?: string;
-		keyword?: string;
-		isPromo?: boolean;
-		availability?: string;
-		language?: string;
-		layout?: string;
-		setType?: string;
-		limit?: number;
-		offset?: number;
-	}): Promise<CardSet[]> {
-		await this._ensure();
+	async search(options?: SearchOptions): Promise<CardSet[]> {
 		const q = new SQLBuilder("cards");
 		const opts = options ?? {};
 		const limit = opts.limit ?? 100;
 		const offset = opts.offset ?? 0;
 
-		if (opts.name) {
-			if (opts.name.includes("%")) {
-				q.whereLike("name", opts.name);
-			} else {
-				q.whereEq("name", opts.name);
-			}
-		}
-		if (opts.fuzzyName) {
-			q.whereFuzzy("cards.name", opts.fuzzyName, 0.8);
-		}
-		if (opts.setCode) q.whereEq("setCode", opts.setCode);
-		if (opts.rarity) q.whereEq("rarity", opts.rarity);
-		if (opts.manaValue !== undefined) q.whereEq("manaValue", opts.manaValue);
-		if (opts.manaValueLte !== undefined)
-			q.whereLte("manaValue", opts.manaValueLte);
-		if (opts.manaValueGte !== undefined)
-			q.whereGte("manaValue", opts.manaValueGte);
-		if (opts.text) q.whereLike("text", `%${opts.text}%`);
-		if (opts.textRegex) q.whereRegex("text", opts.textRegex);
-		if (opts.types) q.whereLike("type", `%${opts.types}%`);
-		if (opts.power) q.whereEq("power", opts.power);
-		if (opts.toughness) q.whereEq("toughness", opts.toughness);
-		if (opts.artist) q.whereLike("artist", `%${opts.artist}%`);
-		if (opts.language) q.whereEq("language", opts.language);
-		if (opts.layout) q.whereEq("layout", opts.layout);
-		if (opts.isPromo !== undefined) q.whereEq("isPromo", opts.isPromo);
-
-		if (opts.colors) {
-			for (const color of opts.colors) {
-				const idx = q._params.length + 1;
-				q._where.push(`list_contains(colors, $${idx})`);
-				q._params.push(color);
-			}
-		}
-		if (opts.colorIdentity) {
-			for (const color of opts.colorIdentity) {
-				const idx = q._params.length + 1;
-				q._where.push(`list_contains(colorIdentity, $${idx})`);
-				q._params.push(color);
-			}
-		}
-		if (opts.keyword) {
-			const idx = q._params.length + 1;
-			q._where.push(`list_contains(keywords, $${idx})`);
-			q._params.push(opts.keyword);
-		}
-		if (opts.availability) {
-			const idx = q._params.length + 1;
-			q._where.push(`list_contains(availability, $${idx})`);
-			q._params.push(opts.availability);
-		}
-
-		if (opts.localizedName) {
-			await this._conn.ensureViews("card_foreign_data");
-			q.select("cards.*");
-			q.join("JOIN card_foreign_data cfd ON cards.uuid = cfd.uuid");
-			if (opts.localizedName.includes("%")) {
-				q.whereLike("cfd.name", opts.localizedName);
-			} else {
-				q.whereEq("cfd.name", opts.localizedName);
-			}
-		}
-
-		if (opts.legalIn) {
-			await this._conn.ensureViews("card_legalities");
-			q.join("JOIN card_legalities cl ON cards.uuid = cl.uuid");
-			q.whereEq("cl.format", opts.legalIn);
-			q.whereEq("cl.status", "Legal");
-		}
-
-		if (opts.setType) {
-			await this._conn.ensureViews("sets");
-			q.select("cards.*");
-			q.join("JOIN sets s ON cards.setCode = s.code");
-			q.whereEq("s.type", opts.setType);
-		}
-
-		if (opts.fuzzyName) {
-			const simIdx = q._params.length + 1;
-			q._params.push(opts.fuzzyName);
-			q.orderBy(
-				`jaro_winkler_similarity(cards.name, $${simIdx}) DESC`,
-				"cards.number ASC",
-			);
-		} else {
-			q.orderBy("cards.name ASC", "cards.number ASC");
-		}
-
+		this._applyFilters(q, opts);
+		q.orderBy("cards.name ASC", "cards.number ASC");
 		q.limit(limit).offset(offset);
+
 		const [sql, params] = q.build();
 		return (await this._conn.execute(sql, params)) as CardSet[];
 	}
 
-	async getPrintings(name: string): Promise<CardSet[]> {
-		return this.getByName(name);
-	}
+	async getPrintings(name: string): Promise<CardSet[]> { return this.getByName(name); }
 
 	async getAtomic(name: string): Promise<CardAtomic[]> {
-		await this._ensure();
-		const atomicCols = [
-			"name",
-			"asciiName",
-			"faceName",
-			"type",
-			"types",
-			"subtypes",
-			"supertypes",
-			"colors",
-			"colorIdentity",
-			"colorIndicator",
-			"producedMana",
-			"manaCost",
-			"text",
-			"layout",
-			"side",
-			"power",
-			"toughness",
-			"loyalty",
-			"keywords",
-			"isFunny",
-			"edhrecSaltiness",
-			"subsets",
-			"manaValue",
-			"faceConvertedManaCost",
-			"faceManaValue",
-			"defense",
-			"hand",
-			"life",
-			"edhrecRank",
-			"hasAlternativeDeckLimit",
-			"isReserved",
-			"isGameChanger",
-			"printings",
-			"leadershipSkills",
-			"relatedCards",
-		];
+		const atomicCols = [ "name",  "hand",   "colors",  "subsets",  "ascii_name", "is_funny",  "mana_value", "subtypes",    "color_identity",  "edhrec_saltiness",  "has_alternative_deck_limit", "leadership_brawl",
+                         "text",  "life",   "layout",  "types",    "toughness",  "face_name", "printings",  "is_reserved", "face_mana_value", "is_game_changer",   "face_converted_mana_cost",   "leadership_commander",
+                         "type",  "side",   "power",   "loyalty",  "keywords",   "defense",   "mana_cost",  "supertypes",  "edhrec_rank",     "color_indicator",   "leadership_oathbreaker" ];
 
 		const q = new SQLBuilder("cards");
 		q.select(...atomicCols);
 		q.whereEq("name", name);
-		q.orderBy(
-			"isFunny ASC NULLS FIRST",
-			"isOnlineOnly ASC NULLS FIRST",
-			"side ASC NULLS FIRST",
-		);
+		q.orderBy("is_funny ASC NULLS FIRST", "is_online_only ASC NULLS FIRST", "side ASC NULLS FIRST" );
 		const [sql, params] = q.build();
 		let rows = await this._conn.execute(sql, params);
 
-		// Fallback: search by faceName for split/adventure/MDFC cards
+		// Fallback: search by face_name for split/adventure/MDFC cards
 		if (rows.length === 0) {
 			const q2 = new SQLBuilder("cards");
 			q2.select(...atomicCols);
-			q2.where("CAST(faceName AS VARCHAR) = $1", name);
+			q2.whereEq("face_name", name);
 			q2.orderBy(
-				"isFunny ASC NULLS FIRST",
-				"isOnlineOnly ASC NULLS FIRST",
+				"is_funny ASC NULLS FIRST",
+				"is_online_only ASC NULLS FIRST",
 				"side ASC NULLS FIRST",
 			);
 			const [sql2, params2] = q2.build();
@@ -239,7 +221,7 @@ export class CardQuery {
 
 		if (rows.length === 0) return [];
 
-		// De-duplicate by name+faceName
+		// De-duplicate by name+faceName (camelCase after snakeToCamel in Connection)
 		const seen = new Set<string>();
 		const unique: Record<string, unknown>[] = [];
 		for (const r of rows) {
@@ -253,32 +235,23 @@ export class CardQuery {
 	}
 
 	async findByScryfallId(scryfallId: string): Promise<CardSet[]> {
-		await this._conn.ensureViews("cards", "card_identifiers");
 		const sql =
 			"SELECT c.* FROM cards c " +
 			"JOIN card_identifiers ci ON c.uuid = ci.uuid " +
-			"WHERE ci.scryfallId = $1";
+			"WHERE ci.scryfall_id = $1";
 		return (await this._conn.execute(sql, [scryfallId])) as CardSet[];
 	}
 
 	async random(count = 1): Promise<CardSet[]> {
-		await this._ensure();
-		const sql = `SELECT * FROM cards USING SAMPLE ${count}`;
+		const sql = `SELECT * FROM cards ORDER BY RANDOM() LIMIT ${count}`;
 		return (await this._conn.execute(sql)) as CardSet[];
 	}
 
-	async count(filters?: Record<string, unknown>): Promise<number> {
-		await this._ensure();
-		if (!filters || Object.keys(filters).length === 0) {
-			return (
-				((await this._conn.executeScalar(
-					"SELECT COUNT(*) FROM cards",
-				)) as number) ?? 0
-			);
-		}
+	/** Count cards matching the given search options (same filters as search()). */
+	async count(options?: SearchOptions): Promise<number> {
 		const q = new SQLBuilder("cards").select("COUNT(*)");
-		for (const [col, val] of Object.entries(filters)) {
-			q.whereEq(col, val);
+		if (options && Object.keys(options).length > 0) {
+			this._applyFilters(q, options);
 		}
 		const [sql, params] = q.build();
 		return ((await this._conn.executeScalar(sql, params)) as number) ?? 0;

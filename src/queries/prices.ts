@@ -3,20 +3,13 @@ import type { Connection } from "../connection.js";
 export class PriceQuery {
 	private _conn: Connection;
 
-	constructor(conn: Connection) {
-		this._conn = conn;
-	}
+	constructor(conn: Connection) { this._conn = conn; }
 
-	private async _ensure(): Promise<void> {
-		await this._conn.ensureViews("all_prices_today");
-	}
+	private async _ensure(): Promise<void> { await this._conn.ensureViews("all_prices_today"); }
 
 	async get(uuid: string): Promise<Record<string, unknown> | null> {
 		await this._ensure();
-		const rows = await this._conn.execute(
-			"SELECT * FROM all_prices_today WHERE uuid = $1 ORDER BY source, provider, price_type, finish, date",
-			[uuid],
-		);
+		const rows = await this._conn.execute("SELECT * FROM all_prices_today WHERE uuid = $1 ORDER BY source, provider, price_type, finish, date", [uuid] );
 		if (rows.length === 0) return null;
 		const result: Record<string, unknown> = {};
 		for (const r of rows) {
@@ -41,20 +34,9 @@ export class PriceQuery {
 		return result;
 	}
 
-	async today(
-		uuid: string,
-		options?: {
-			provider?: string;
-			finish?: string;
-			priceType?: string;
-		},
-	): Promise<Record<string, unknown>[]> {
+	async today( uuid: string, options?: {	provider?: string; finish?: string; priceType?: string; } ): Promise<Record<string, unknown>[]> {
 		await this._ensure();
-		const parts = [
-			"SELECT * FROM all_prices_today",
-			"WHERE uuid = $1",
-			"AND date = (SELECT MAX(p2.date) FROM all_prices_today p2 WHERE p2.uuid = $1)",
-		];
+		const parts = ["SELECT * FROM all_prices_today", "WHERE uuid = $1", "AND date = (SELECT MAX(p2.date) FROM all_prices_today p2 WHERE p2.uuid = $1)" ];
 		const params: unknown[] = [uuid];
 		let idx = 2;
 		if (options?.provider) {
@@ -75,16 +57,7 @@ export class PriceQuery {
 		return this._conn.execute(parts.join(" "), params);
 	}
 
-	async history(
-		uuid: string,
-		options?: {
-			provider?: string;
-			finish?: string;
-			priceType?: string;
-			dateFrom?: string;
-			dateTo?: string;
-		},
-	): Promise<Record<string, unknown>[]> {
+	async history( uuid: string,	options?: { provider?: string; finish?: string; priceType?: string; dateFrom?: string; dateTo?: string; } ): Promise<Record<string, unknown>[]> {
 		await this._conn.ensureViews("all_prices");
 		const parts = ["SELECT * FROM all_prices WHERE uuid = $1"];
 		const params: unknown[] = [uuid];
@@ -118,14 +91,7 @@ export class PriceQuery {
 		return this._conn.execute(parts.join(" "), params);
 	}
 
-	async priceTrend(
-		uuid: string,
-		options?: {
-			provider?: string;
-			finish?: string;
-			priceType?: string;
-		},
-	): Promise<Record<string, unknown> | null> {
+	async priceTrend( uuid: string, options?: {	provider?: string; finish?: string;	priceType?: string;	}	): Promise<Record<string, unknown> | null> {
 		await this._conn.ensureViews("all_prices");
 		const priceType = options?.priceType ?? "retail";
 		const parts = [
@@ -156,14 +122,7 @@ export class PriceQuery {
 		return rows[0];
 	}
 
-	async cheapestPrinting(
-		name: string,
-		options?: {
-			provider?: string;
-			finish?: string;
-			priceType?: string;
-		},
-	): Promise<Record<string, unknown> | null> {
+	async cheapestPrinting( name: string,	options?: {	provider?: string; finish?: string; priceType?: string;	} ): Promise<Record<string, unknown> | null> {
 		await this._ensure();
 		await this._conn.ensureViews("cards");
 		const provider = options?.provider ?? "tcgplayer";
@@ -180,22 +139,11 @@ export class PriceQuery {
 			"AND p2.finish = $3 AND p2.price_type = $4) " +
 			"ORDER BY p.price ASC " +
 			"LIMIT 1";
-		const rows = await this._conn.execute(sql, [
-			name,
-			provider,
-			finish,
-			priceType,
-		]);
+		const rows = await this._conn.execute(sql, [name, provider, finish, priceType, ]);
 		return rows[0] ?? null;
 	}
 
-	async cheapestPrintings(options?: {
-		provider?: string;
-		finish?: string;
-		priceType?: string;
-		limit?: number;
-		offset?: number;
-	}): Promise<Record<string, unknown>[]> {
+	async cheapestPrintings(options?: { provider?: string; finish?: string; priceType?: string; limit?: number; offset?: number; }): Promise<Record<string, unknown>[]> {
 		await this._ensure();
 		await this._conn.ensureViews("cards");
 		const provider = options?.provider ?? "tcgplayer";
@@ -207,13 +155,7 @@ export class PriceQuery {
 		return this._conn.execute(sql, [provider, finish, priceType]);
 	}
 
-	async mostExpensivePrintings(options?: {
-		provider?: string;
-		finish?: string;
-		priceType?: string;
-		limit?: number;
-		offset?: number;
-	}): Promise<Record<string, unknown>[]> {
+	async mostExpensivePrintings(options?: {provider?: string; finish?: string; priceType?: string; limit?: number; offset?: number; }): Promise<Record<string, unknown>[]> {
 		await this._ensure();
 		await this._conn.ensureViews("cards");
 		const provider = options?.provider ?? "tcgplayer";

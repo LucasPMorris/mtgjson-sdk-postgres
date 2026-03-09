@@ -1,25 +1,10 @@
 import { BoosterSimulator } from "./booster/simulator.js";
 import { CacheManager, type ProgressCallback } from "./cache.js";
 import { Connection } from "./connection.js";
-import {
-	CardQuery,
-	DeckQuery,
-	EnumQuery,
-	IdentifierQuery,
-	LegalityQuery,
-	PriceQuery,
-	SealedQuery,
-	SetQuery,
-	SkuQuery,
-	TokenQuery,
-} from "./queries/index.js";
+import { CardQuery, DeckQuery, EnumQuery, IdentifierQuery, LegalityQuery, PriceQuery, SealedQuery, SetQuery, SkuQuery, TokenQuery } from "./queries/index.js";
 
-export interface MtgjsonSDKOptions {
-	cacheDir?: string;
-	offline?: boolean;
-	timeout?: number;
-	onProgress?: ProgressCallback;
-}
+/** PostgreSQL connection URL. Falls back to DATABASE_URL env var. */
+export interface MtgjsonSDKOptions { databaseUrl?: string; cacheDir?: string; offline?: boolean; timeout?: number;	onProgress?: ProgressCallback; }
 
 export class MtgjsonSDK {
 	private _cache: CacheManager;
@@ -37,19 +22,13 @@ export class MtgjsonSDK {
 	private _enums: EnumQuery | null = null;
 	private _booster: BoosterSimulator | null = null;
 
-	private constructor(options?: MtgjsonSDKOptions) {
-		this._cache = new CacheManager({
-			cacheDir: options?.cacheDir,
-			offline: options?.offline,
-			timeout: options?.timeout,
-			onProgress: options?.onProgress,
-		});
-	}
+	private constructor(options?: MtgjsonSDKOptions) { this._cache = new CacheManager({ cacheDir: options?.cacheDir,offline: options?.offline, timeout: options?.timeout, onProgress: options?.onProgress }); }
 
 	static async create(options?: MtgjsonSDKOptions): Promise<MtgjsonSDK> {
 		const sdk = new MtgjsonSDK(options);
 		await sdk._cache.init();
-		sdk._conn = await Connection.create(sdk._cache);
+		const url =	options?.databaseUrl ??	process.env.DATABASE_URL ?? "postgresql://localhost/mtgjson";
+		sdk._conn = Connection.create(url);
 		return sdk;
 	}
 
@@ -69,7 +48,7 @@ export class MtgjsonSDK {
 	}
 
 	get decks(): DeckQuery {
-		if (!this._decks) this._decks = new DeckQuery(this._cache);
+		if (!this._decks) this._decks = new DeckQuery(this._conn);
 		return this._decks;
 	}
 
@@ -109,52 +88,12 @@ export class MtgjsonSDK {
 	}
 
 	get meta(): Promise<Record<string, unknown>> {
-		return this._cache.loadJson("meta").catch(() => ({}));
-	}
+		return this._conn.execute("SELECT * FROM meta LIMIT 1").then((rows) => rows[0] ?? {}).catch(() => ({})); }
 
-	get views(): string[] {
-		return [...this._conn._registeredViews].sort();
-	}
+	async sql( query: string, params?: unknown[] ): Promise<Record<string, unknown>[]> { return this._conn.execute(query, params); }
 
-	async sql(
-		query: string,
-		params?: unknown[],
-	): Promise<Record<string, unknown>[]> {
-		return this._conn.execute(query, params);
-	}
-
-	async refresh(): Promise<boolean> {
-		if (!(await this._cache.isStale())) return false;
-		this._conn._registeredViews.clear();
-		this._cards = null;
-		this._sets = null;
-		this._prices = null;
-		this._decks = null;
-		this._sealed = null;
-		this._skus = null;
-		this._identifiers = null;
-		this._legalities = null;
-		this._tokens = null;
-		this._enums = null;
-		this._booster = null;
-		return true;
-	}
-
-	async exportDb(path: string): Promise<string> {
-		const pathStr = path.replace(/\\/g, "/");
-		const raw = this._conn.raw;
-		await raw.run(`ATTACH '${pathStr}' AS export_db`);
-		try {
-			for (const viewName of [...this._conn._registeredViews].sort()) {
-				await raw.run(
-					`CREATE TABLE export_db.${viewName} AS SELECT * FROM ${viewName}`,
-				);
-			}
-		} finally {
-			await raw.run("DETACH export_db");
-		}
-		return path;
-	}
+	/** No-op in postgres mode — data is persistent. */
+	async refresh(): Promise<boolean> { return false; }
 
 	async close(): Promise<void> {
 		await this._conn.close();
@@ -162,7 +101,5 @@ export class MtgjsonSDK {
 	}
 
 	/** For `await using sdk = await MtgjsonSDK.create()` */
-	async [Symbol.asyncDispose](): Promise<void> {
-		await this.close();
-	}
+	async [Symbol.asyncDispose](): Promise<void> { await this.close();	}
 }

@@ -23,7 +23,6 @@ export type { ProgressCallback } from "./cache.js";
 export type {
 	// Sub-models
 	ForeignData,
-	ForeignDataIdentifiers,
 	Identifiers,
 	LeadershipSkills,
 	Legalities,
@@ -58,16 +57,10 @@ export type {
 	// Set models
 	DeckSet,
 	SetList,
-	MtgSet,
 	SealedProduct,
 	DeckList,
 	Deck,
 	// File models
 	AllPricesFile,
 	AllPrintingsFile,
-	CardTypesFile,
-	DeckListFile,
-	KeywordsFile,
-	SetListFile,
-	TcgplayerSkusFile,
 } from "./types/index.js";

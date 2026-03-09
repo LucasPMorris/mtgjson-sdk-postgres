@@ -13,24 +13,97 @@ export class BoosterSimulator {
 		this._conn = conn;
 	}
 
-	private async _ensure(): Promise<void> {
-		await this._conn.ensureViews("sets", "cards");
-	}
-
 	private async _getBoosterConfig(
 		setCode: string,
 	): Promise<Record<string, BoosterConfig> | null> {
-		await this._ensure();
-		try {
-			const rows = await this._conn.execute(
-				"SELECT booster FROM sets WHERE code = $1",
-				[setCode.toUpperCase()],
-			);
-			if (!rows.length || !rows[0].booster) return null;
-			return rows[0].booster as Record<string, BoosterConfig>;
-		} catch {
-			return null;
+		const code = setCode.toUpperCase();
+
+		// 1. Sheet metadata
+		const sheetsRows = await this._conn.execute(
+			`SELECT booster_name, sheet_name, sheet_is_foil, sheet_has_balance_colors, sheet_total_weight
+			 FROM set_booster_sheets WHERE set_code = $1`,
+			[code],
+		);
+		if (sheetsRows.length === 0) return null;
+
+		// 2. Sheet cards (uuid → weight)
+		const sheetCardsRows = await this._conn.execute(
+			`SELECT booster_name, sheet_name, card_uuid, card_weight
+			 FROM set_booster_sheet_cards WHERE set_code = $1`,
+			[code],
+		);
+
+		// 3. Booster pack weights
+		const weightRows = await this._conn.execute(
+			`SELECT booster_name, booster_index, booster_weight
+			 FROM set_booster_content_weights WHERE set_code = $1
+			 ORDER BY booster_index ASC`,
+			[code],
+		);
+
+		// 4. Booster pack contents (sheet → picks)
+		const contentRows = await this._conn.execute(
+			`SELECT booster_name, booster_index, sheet_name, sheet_picks
+			 FROM set_booster_contents WHERE set_code = $1
+			 ORDER BY booster_index ASC`,
+			[code],
+		);
+
+		// Assemble: group by booster_name
+		const configs: Record<string, BoosterConfig> = {};
+
+		// Build sheets per booster
+		for (const row of sheetsRows) {
+			const bName = row.boosterName as string;
+			const sName = row.sheetName as string;
+			if (!configs[bName]) {
+				configs[bName] = { boosters: [], boostersTotalWeight: 0, sheets: {}, sourceSetCodes: [] };
+			}
+			configs[bName].sheets[sName] = {
+				foil: (row.sheetIsFoil as boolean) ?? false,
+				balanceColors: (row.sheetHasBalanceColors as boolean) ?? undefined,
+				totalWeight: (row.sheetTotalWeight as number) ?? 0,
+				cards: {},
+			};
 		}
+
+		// Populate cards into sheets
+		for (const row of sheetCardsRows) {
+			const bName = row.boosterName as string;
+			const sName = row.sheetName as string;
+			const cardUuid = row.cardUuid as string;
+			const cardWeight = row.cardWeight as number;
+			if (configs[bName]?.sheets[sName]) {
+				configs[bName].sheets[sName].cards[cardUuid] = cardWeight;
+			}
+		}
+
+		// Build boosters array per booster name
+		// First pass: ensure array slots exist from weight rows
+		for (const row of weightRows) {
+			const bName = row.boosterName as string;
+			const idx = row.boosterIndex as number;
+			const weight = row.boosterWeight as number;
+			if (!configs[bName]) continue;
+			while (configs[bName].boosters.length <= idx) {
+				configs[bName].boosters.push({ contents: {}, weight: 0 });
+			}
+			configs[bName].boosters[idx].weight = weight;
+			configs[bName].boostersTotalWeight += weight;
+		}
+
+		// Second pass: fill contents
+		for (const row of contentRows) {
+			const bName = row.boosterName as string;
+			const idx = row.boosterIndex as number;
+			const sName = row.sheetName as string;
+			const picks = row.sheetPicks as number;
+			if (configs[bName]?.boosters[idx]) {
+				configs[bName].boosters[idx].contents[sName] = picks;
+			}
+		}
+
+		return Object.keys(configs).length > 0 ? configs : null;
 	}
 
 	async availableTypes(setCode: string): Promise<string[]> {
@@ -56,13 +129,12 @@ export class BoosterSimulator {
 		for (const [sheetName, count] of Object.entries(packTemplate.contents)) {
 			if (!(sheetName in sheets)) continue;
 			const sheet = sheets[sheetName];
-			const picked = pickFromSheet(sheet, count);
+			const picked = pickFromSheet(sheet, count as number);
 			cardUuids.push(...picked);
 		}
 
 		if (cardUuids.length === 0) return [];
 
-		await this._conn.ensureViews("cards");
 		const placeholders = cardUuids.map((_, i) => `$${i + 1}`).join(", ");
 		const sql = `SELECT * FROM cards WHERE uuid IN (${placeholders})`;
 		const rows = await this._conn.execute(sql, cardUuids);

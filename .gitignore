@@ -3,3 +3,5 @@ dist/
 *.tsbuildinfo
 .cache/
 *.tmp
+.env*
+tempdata/
