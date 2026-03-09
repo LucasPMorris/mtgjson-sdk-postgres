@@ -1,23 +1,17 @@
 /**
- * Seed a PostgreSQL database from MTGJSON's AllPrintings.json using a streaming
- * JSON parser so the file is never fully loaded into memory.
+ * CLI: full initial database seed from a local AllPrintings.json.
+ * For day-to-day incremental updates use sdk.update() or sdk.checkForUpdates().
  *
  * Usage:
  *   DATABASE_URL=postgresql://user:pass@host/db \
  *   bun scripts/seed-from-json.ts [path/to/AllPrintings.json]
- *
- * Each set is inserted in a single transaction:
- *   sets → set_translations → sealed_product → boosters → set_decks → cards → tokens
- * Junction tables (card_related_cards, card_source_products, etc.) are buffered
- * and inserted last because they contain cross-set UUID references.
- *
- * Re-running performs a full rebuild (TRUNCATE ... CASCADE before inserting).
- *
  */
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { seedDatabase } from "../src/seeder.js";
 
+// Legacy imports kept below — no longer used by main() but left for reference.
 import { createReadStream } from "node:fs";
-// import dotenv from "dotenv";
-// dotenv.config({ path: ".env.local" });
 import { chain } from "stream-chain";
 import parser from "stream-json";
 import pick from "stream-json/filters/Pick.js";
@@ -633,93 +627,32 @@ async function main() {
 	const connStr = process.env.DATABASE_URL;
 	if (!connStr) {
 		console.error("Error: DATABASE_URL environment variable is required.");
-		console.error("  Example: DATABASE_URL=postgresql://user:pass@localhost/mtgjson bun scripts/seed-from-json.ts");
 		process.exit(1);
 	}
 
-	const jsonPath = process.argv[2] ?? "./tempdata/AllPrintings.json";
+	const jsonPath  = process.argv[2] ?? "./tempdata/AllPrintings.json";
+	const schemaDir = join(fileURLToPath(import.meta.url), "..", ".");
+	console.log(`Seeding from ${jsonPath} …\n`);
 
-	const db = postgres(connStr);
+	let lastSet = "";
+	const result = await seedDatabase(connStr, jsonPath, {
+		schemaDir,
+		onProgress: ({ setCode, setCount, cardCount, tokenCount }) => {
+			lastSet = setCode;
+			process.stdout.write(`\r  Sets: ${setCount}  Cards: ${cardCount}  Tokens: ${tokenCount}  (${setCode})            `);
+		},
+	});
 
-	// Drop and recreate all tables (schema.sql includes DROP TABLE ... CASCADE)
-	const { readFileSync } = await import("node:fs");
-	const schemaSql = readFileSync("./scripts/schema.sql", "utf8");
-	console.log("\nDropping and recreating all tables from schema.sql...");
-	await db.unsafe(schemaSql);
-
-
-	// ------------------------------------------------------------------
-	// 1. Truncate all tables
-	// ------------------------------------------------------------------
-	// console.log("Truncating existing data...");
-	// await db`TRUNCATE TABLE meta, sets, sealed_product RESTART IDENTITY CASCADE`;
-
-	// ------------------------------------------------------------------
-	// 2. Meta (reads only the first ~100 bytes of JSON before stopping)
-	// ------------------------------------------------------------------
-	process.stdout.write("Reading meta... ");
-	const meta = await readMeta(jsonPath);
-	await db`INSERT INTO meta ${db(meta)}`;
-	console.log(`${meta.version} (${meta.date})`);
-
-	// ------------------------------------------------------------------
-	// 3. Stream sets — insert each in a transaction as we go
-	// ------------------------------------------------------------------
-	const junctions: JunctionData = {
-		cardRelatedCards:    [],
-		tokenRelatedCards:   [],
-		cardSourceProducts:  [],
-		tokenSourceProducts: [],
-	};
-
-	let setCount = 0;
-	let cardCount = 0;
-	let tokenCount = 0;
-
-	console.log(`Streaming ${jsonPath}...`);
-	const total = await streamSets(jsonPath, async (setCode, set) => {
-		setCount++;
-		cardCount  += set.cards.length;
-		tokenCount += set.tokens.length;
-
-		await db.begin(async (tx) => { await processSet(tx, set, junctions); });
-    
-    process.stdout.write(`\r  Sets: ${setCount}  Cards: ${cardCount}  Tokens: ${tokenCount}  (${setCode})            `);
-  });
-
-	console.log(`\r  Done: ${total} sets, ${cardCount} cards, ${tokenCount} tokens.           `);
-
-	// ------------------------------------------------------------------
-	// 4. Insert junction tables (cross-set references — inserted after
-	//    all cards/tokens/sealedProducts are committed)
-	// ------------------------------------------------------------------
-	const junctionPhases: Array<{ table: string; rows: AnyRow[] }> = [
-		{ table: "card_related_cards",    rows: junctions.cardRelatedCards },
-		{ table: "token_related_cards",   rows: junctions.tokenRelatedCards },
-		{ table: "card_source_products",  rows: junctions.cardSourceProducts },
-		{ table: "token_source_products", rows: junctions.tokenSourceProducts },
-	];
-
-	for (const { table, rows } of junctionPhases) {
-		if (rows.length === 0) {
-			console.log(`  ${table}: (empty)`);
-			continue;
-		}
-		process.stdout.write(`  ${table}: ${rows.length} rows... `);
-		await batchInsert(db, table, rows);
-		console.log("done");
-	}
-
-	const relationsSql = readFileSync("./scripts/relations.sql", "utf8");
-	console.log("\nDropping and recreating all tables from relations.sql...");
-	await db.unsafe(relationsSql);
-
-	await db.end();
-	console.log("\nSeed complete.");
+	console.log(`\r  Done: ${result.sets} sets, ${result.cards} cards, ${result.tokens} tokens (last: ${lastSet}).           `);
+	console.log(`\nSeed complete — MTGJSON ${result.version} (${result.date})`);
 }
 
 main().catch((err) => {
-	process.stderr.write("\n"); // clear the \r progress line before printing the error
+	process.stderr.write("\n");
 	console.error(err);
 	process.exit(1);
 });
+// ──────────────────────────────────────────────────────────────────────────────
+// Legacy implementations below — superseded by src/seeder.ts
+// These are kept for reference but are NOT called by main().
+// ──────────────────────────────────────────────────────────────────────────────

@@ -2,13 +2,18 @@ import { BoosterSimulator } from "./booster/simulator.js";
 import { CacheManager, type ProgressCallback } from "./cache.js";
 import { Connection } from "./connection.js";
 import { CardQuery, DeckQuery, EnumQuery, IdentifierQuery, LegalityQuery, PriceQuery, SealedQuery, SetQuery, SkuQuery, TokenQuery } from "./queries/index.js";
+import { checkForSetUpdates, applySetUpdates, type UpdateCheckResult, type UpdateResult, type UpdateProgress } from "./updater.js";
 
 /** PostgreSQL connection URL. Falls back to DATABASE_URL env var. */
-export interface MtgjsonSDKOptions { databaseUrl?: string; cacheDir?: string; offline?: boolean; timeout?: number;	onProgress?: ProgressCallback; }
+export interface MtgjsonSDKOptions { databaseUrl?: string; cacheDir?: string; offline?: boolean; timeout?: number;	onProgress?: ProgressCallback;
+	/** How often to re-check the CDN for a new MTGJSON version (ms). Default: 1 hour. */
+	staleCheckTtlMs?: number;
+}
 
 export class MtgjsonSDK {
 	private _cache: CacheManager;
 	private _conn!: Connection;
+	private _connectionUrl!: string;
 
 	private _cards: CardQuery | null = null;
 	private _sets: SetQuery | null = null;
@@ -22,12 +27,13 @@ export class MtgjsonSDK {
 	private _enums: EnumQuery | null = null;
 	private _booster: BoosterSimulator | null = null;
 
-	private constructor(options?: MtgjsonSDKOptions) { this._cache = new CacheManager({ cacheDir: options?.cacheDir,offline: options?.offline, timeout: options?.timeout, onProgress: options?.onProgress }); }
+	private constructor(options?: MtgjsonSDKOptions) { this._cache = new CacheManager({ cacheDir: options?.cacheDir, offline: options?.offline, timeout: options?.timeout, onProgress: options?.onProgress, staleCheckTtlMs: options?.staleCheckTtlMs }); }
 
 	static async create(options?: MtgjsonSDKOptions): Promise<MtgjsonSDK> {
 		const sdk = new MtgjsonSDK(options);
 		await sdk._cache.init();
-		const url =	options?.databaseUrl ??	process.env.DATABASE_URL ?? "postgresql://localhost/mtgjson";
+		const url = options?.databaseUrl ?? process.env.DATABASE_URL ?? "postgresql://localhost/mtgjson";
+		sdk._connectionUrl = url;
 		sdk._conn = Connection.create(url);
 		return sdk;
 	}
@@ -94,6 +100,29 @@ export class MtgjsonSDK {
 
 	/** No-op in postgres mode — data is persistent. */
 	async refresh(): Promise<boolean> { return false; }
+
+	/**
+	 * Check MTGJSON's SetList.json and return any set codes not yet in the database.
+	 * Makes a single CDN request (SetList.json is the lightweight manifest).
+	 */
+	async checkForUpdates(): Promise<UpdateCheckResult> {
+		return checkForSetUpdates(this._connectionUrl);
+	}
+
+	/**
+	 * Download and seed any sets present in MTGJSON but absent from the database.
+	 * Each new set is fetched individually — no full AllPrintings.json download needed.
+	 *
+	 * @param options.sets   Explicit set codes to add — skips the SetList check.
+	 * @param options.onProgress  Called after each set is seeded.
+	 */
+	async update(options?: {
+		sets?: string[];
+		timeout?: number;
+		onProgress?: (progress: UpdateProgress) => void;
+	}): Promise<UpdateResult> {
+		return applySetUpdates(this._connectionUrl, options);
+	}
 
 	async close(): Promise<void> {
 		await this._conn.close();

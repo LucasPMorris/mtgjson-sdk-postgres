@@ -1,20 +1,12 @@
 export { MtgjsonSDK } from "./client.js";
 export type { MtgjsonSDKOptions } from "./client.js";
 
-export {
-	CardQuery,
-	CardPaginator,
-	SetQuery,
-	TokenQuery,
-	PriceQuery,
-	LegalityQuery,
-	IdentifierQuery,
-	DeckQuery,
-	SealedQuery,
-	SkuQuery,
-	EnumQuery,
-} from "./queries/index.js";
+export { seedDatabase, seedSingleSet } from "./seeder.js";
+export type { SeedResult, SeedOptions, SeedProgress } from "./seeder.js";
+export { checkForSetUpdates, applySetUpdates } from "./updater.js";
+export type { SetListEntry, UpdateCheckResult, UpdateResult, UpdateProgress } from "./updater.js";
 
+export { CardQuery, CardPaginator, SetQuery, TokenQuery,	PriceQuery,	LegalityQuery, IdentifierQuery, DeckQuery, SealedQuery, SkuQuery,	EnumQuery } from "./queries/index.js";
 export { BoosterSimulator } from "./booster/simulator.js";
 export { SQLBuilder } from "./sql-builder.js";
 export { Connection } from "./connection.js";

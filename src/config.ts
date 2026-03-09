@@ -6,7 +6,6 @@ export const CDN_BASE = "https://mtgjson.com/api/v5";
 
 /** Mapping of logical view names to CDN parquet file paths. */
 export const PARQUET_FILES: Record<string, string> = {
-	// Flat normalized tables
 	cards: "parquet/cards.parquet",
 	tokens: "parquet/tokens.parquet",
 	sets: "parquet/sets.parquet",
@@ -17,14 +16,11 @@ export const PARQUET_FILES: Record<string, string> = {
 	card_purchase_urls: "parquet/cardPurchaseUrls.parquet",
 	set_translations: "parquet/setTranslations.parquet",
 	token_identifiers: "parquet/tokenIdentifiers.parquet",
-	// Booster tables
 	set_booster_content_weights: "parquet/setBoosterContentWeights.parquet",
 	set_booster_contents: "parquet/setBoosterContents.parquet",
 	set_booster_sheet_cards: "parquet/setBoosterSheetCards.parquet",
 	set_booster_sheets: "parquet/setBoosterSheets.parquet",
-	// Full nested
-	all_printings: "parquet/AllPrintings.parquet",
-	// Prices and SKUs
+	all_printings: "parquet/AllPrintings.parquet",      // Full nested
 	all_prices_today: "parquet/AllPricesToday.parquet",
 	all_prices: "parquet/AllPrices.parquet",
 	tcgplayer_skus: "parquet/TcgplayerSkus.parquet",
@@ -32,11 +28,12 @@ export const PARQUET_FILES: Record<string, string> = {
 
 /** Mapping of logical data names to CDN JSON file paths. */
 export const JSON_FILES: Record<string, string> = {
-	keywords: "Keywords.json",
-	card_types: "CardTypes.json",
-	deck_list: "DeckList.json",
+	keywords:    "Keywords.json",
+	card_types:  "CardTypes.json",
+	deck_list:   "DeckList.json",
 	enum_values: "EnumValues.json",
-	meta: "Meta.json",
+	set_list:    "SetList.json",
+	meta:        "Meta.json",
 };
 
 /** URL for the MTGJSON version metadata endpoint. */

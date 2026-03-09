@@ -14,15 +14,26 @@ type SearchOptions = {
 	colors?: string[];
 	colorIdentity?: string[];
 	types?: string;
+	subtype?: string;
 	rarity?: string;
 	legalIn?: string;
 	manaValue?: number;
 	manaValueLte?: number;
 	manaValueGte?: number;
+	manaValueLt?: number;
+	manaValueGt?: number;
 	text?: string;
 	textRegex?: string;
 	power?: string;
+	powerGte?: number;
+	powerLte?: number;
+	powerGt?: number;
+	powerLt?: number;
 	toughness?: string;
+	toughnessGte?: number;
+	toughnessLte?: number;
+	toughnessGt?: number;
+	toughnessLt?: number;
 	artist?: string;
 	keywordAbilities?: string[];
 	keywordActions?: string[];
@@ -82,15 +93,30 @@ export class CardQuery {
 		if (opts.manaValue !== undefined) q.whereEq("mana_value", opts.manaValue);
 		if (opts.manaValueLte !== undefined) q.whereLte("mana_value", opts.manaValueLte);
 		if (opts.manaValueGte !== undefined) q.whereGte("mana_value", opts.manaValueGte);
+		if (opts.manaValueLt  !== undefined) q.where("mana_value < $1", opts.manaValueLt);
+		if (opts.manaValueGt  !== undefined) q.where("mana_value > $1", opts.manaValueGt);
 		if (opts.text) q.whereLike("text", `%${opts.text}%`);
 		if (opts.textRegex) q.whereRegex("text", opts.textRegex);
 		if (opts.types) q.whereLike("type", `%${opts.types}%`);
+		if (opts.subtype) {
+			const idx = q._params.length + 1;
+			q._where.push(`$${idx} = ANY(subtypes)`);
+			q._params.push(opts.subtype);
+		}
 		if (opts.power) q.whereEq("power", opts.power);
+		if (opts.powerGte !== undefined) q.where(`power ~ '^-?[0-9]+(\\.[0-9]+)?$' AND power::NUMERIC >= $1`, opts.powerGte);
+		if (opts.powerLte !== undefined) q.where(`power ~ '^-?[0-9]+(\\.[0-9]+)?$' AND power::NUMERIC <= $1`, opts.powerLte);
+		if (opts.powerGt  !== undefined) q.where(`power ~ '^-?[0-9]+(\\.[0-9]+)?$' AND power::NUMERIC > $1`,  opts.powerGt);
+		if (opts.powerLt  !== undefined) q.where(`power ~ '^-?[0-9]+(\\.[0-9]+)?$' AND power::NUMERIC < $1`,  opts.powerLt);
 		if (opts.toughness) q.whereEq("toughness", opts.toughness);
+		if (opts.toughnessGte !== undefined) q.where(`toughness ~ '^-?[0-9]+(\\.[0-9]+)?$' AND toughness::NUMERIC >= $1`, opts.toughnessGte);
+		if (opts.toughnessLte !== undefined) q.where(`toughness ~ '^-?[0-9]+(\\.[0-9]+)?$' AND toughness::NUMERIC <= $1`, opts.toughnessLte);
+		if (opts.toughnessGt  !== undefined) q.where(`toughness ~ '^-?[0-9]+(\\.[0-9]+)?$' AND toughness::NUMERIC > $1`,  opts.toughnessGt);
+		if (opts.toughnessLt  !== undefined) q.where(`toughness ~ '^-?[0-9]+(\\.[0-9]+)?$' AND toughness::NUMERIC < $1`,  opts.toughnessLt);
 		if (opts.artist) q.whereLike("artist", `%${opts.artist}%`);
 		if (opts.language) q.whereEq("language", opts.language);
 		if (opts.layout) q.whereEq("layout", opts.layout);
-		// Boolean include filters — excluded by default; enabling lifts the exclusion
+		// Boolean include filters — omitted or false (default) excludes that category; true lifts the exclusion.
 		if (opts.isPromo !== true)     q._where.push("(is_promo IS NULL OR is_promo = FALSE)");
 		if (opts.isOversized !== true)  q._where.push("(is_oversized IS NULL OR is_oversized = FALSE)");
 		if (opts.isOnlineOnly !== true) q._where.push("(is_online_only IS NULL OR is_online_only = FALSE)");
@@ -250,9 +276,7 @@ export class CardQuery {
 	/** Count cards matching the given search options (same filters as search()). */
 	async count(options?: SearchOptions): Promise<number> {
 		const q = new SQLBuilder("cards").select("COUNT(*)");
-		if (options && Object.keys(options).length > 0) {
-			this._applyFilters(q, options);
-		}
+		this._applyFilters(q, options ?? {});
 		const [sql, params] = q.build();
 		return ((await this._conn.executeScalar(sql, params)) as number) ?? 0;
 	}
@@ -264,13 +288,7 @@ export class CardQuery {
 	 * @param opts   Search filters (limit/offset are managed by the paginator).
 	 * @param pageSize  Number of cards per page (default 20).
 	 */
-	async paginate(
-		opts?: Omit<SearchOptions, "limit" | "offset">,
-		pageSize = 20,
-	): Promise<CardPaginator> {
-		return CardPaginator.create(this, opts, pageSize);
-	}
-}
+	async paginate(	opts?: Omit<SearchOptions, "limit" | "offset">,	pageSize = 20 ): Promise<CardPaginator> { return CardPaginator.create(this, opts, pageSize); } }
 
 // ---------------------------------------------------------------------------
 // Sliding-window paginator
@@ -299,19 +317,12 @@ export class CardPaginator {
 	private _query: CardQuery;
 	private _opts: Omit<SearchOptions, "limit" | "offset">;
 	private _pageSize: number;
-	/** page-number → results */
-	private _cache: Map<number, CardSet[]>;
-	/** Ordered list of page numbers currently held in the window. */
-	private _windowPages: number[];
+	private _cache: Map<number, CardSet[]>;               /** page-number → results */
+	private _windowPages: number[];                       /** page numbers currently held in the window, in order (for eviction decisions) */
 	private _currentPage: number;
-	/** In-flight slide operation, if any. */
-	private _pendingSlide: Promise<void> | null = null;
+	private _pendingSlide: Promise<void> | null = null;   /** In-flight slide operation, if any. */
 
-	private constructor(
-		query: CardQuery,
-		opts: Omit<SearchOptions, "limit" | "offset">,
-		pageSize: number,
-	) {
+	private constructor( query: CardQuery, opts: Omit<SearchOptions, "limit" | "offset">, pageSize: number ) {
 		this._query = query;
 		this._opts = opts;
 		this._pageSize = pageSize;
@@ -321,11 +332,7 @@ export class CardPaginator {
 	}
 
 	/** Create and initialise a paginator, pre-fetching the first window of pages. */
-	static async create(
-		query: CardQuery,
-		opts?: Omit<SearchOptions, "limit" | "offset">,
-		pageSize = 20,
-	): Promise<CardPaginator> {
+	static async create( query: CardQuery, opts?: Omit<SearchOptions, "limit" | "offset">, pageSize = 20 ): Promise<CardPaginator> {
 		const p = new CardPaginator(query, opts ?? {}, pageSize);
 		await p._initWindow();
 		return p;
@@ -334,79 +341,49 @@ export class CardPaginator {
 	private async _fetchPage(pageNum: number): Promise<void> {
 		if (this._cache.has(pageNum)) return;
 		const offset = (pageNum - 1) * this._pageSize;
-		const results = await this._query.search({
-			...this._opts,
-			limit: this._pageSize,
-			offset,
-		});
+		const results = await this._query.search({ ...this._opts, limit: this._pageSize, offset	});
 		this._cache.set(pageNum, results);
 	}
 
 	private async _initWindow(): Promise<void> {
-		await Promise.all(
-			Array.from({ length: PAGINATOR_WINDOW_SIZE }, (_, i) =>
-				this._fetchPage(i + 1),
-			),
-		);
-		this._windowPages = Array.from(
-			{ length: PAGINATOR_WINDOW_SIZE },
-			(_, i) => i + 1,
-		);
+  	await Promise.all( Array.from({ length: PAGINATOR_WINDOW_SIZE }, (_, i) => this._fetchPage(i + 1) ) ); 
+		this._windowPages = Array.from({ length: PAGINATOR_WINDOW_SIZE }, (_, i) => i + 1 );
 		this._currentPage = 1;
 	}
 
-	private async _slideForward(): Promise<void> {
-		const nextPage =
-			this._windowPages[this._windowPages.length - 1] + 1;
-		await this._fetchPage(nextPage);
-		const evicted = this._windowPages.shift()!;
-		this._cache.delete(evicted);
+	private _slideForward(): void {
+		if (this._pendingSlide) return;
+		const nextPage = this._windowPages[this._windowPages.length - 1] + 1;
+		const evicted = this._windowPages.shift()!;               // Update the window immediately so navigation decisions are always correct.
 		this._windowPages.push(nextPage);
+		this._pendingSlide = this._fetchPage(nextPage).then(() => { this._cache.delete(evicted); }).finally(() => { this._pendingSlide = null; });  // Fetch in the background; evict from cache only after the fetch succeeds.
 	}
 
-	private async _slideBackward(): Promise<void> {
+	private _slideBackward(): void {
+		if (this._pendingSlide) return;
 		const windowStart = this._windowPages[0];
 		if (windowStart <= 1) return;
 		const prevPage = windowStart - 1;
-		await this._fetchPage(prevPage);
 		const evicted = this._windowPages.pop()!;
-		this._cache.delete(evicted);
 		this._windowPages.unshift(prevPage);
+		this._pendingSlide = this._fetchPage(prevPage).then(() => { this._cache.delete(evicted); }).finally(() => { this._pendingSlide = null; });
 	}
 
 	// -----------------------------------------------------------------------
 	// Public API
 	// -----------------------------------------------------------------------
 
-	/** Results for the current page. */
-	get current(): CardSet[] {
-		return this._cache.get(this._currentPage) ?? [];
-	}
 
-	/** 1-based current page number. */
-	get currentPageNumber(): number {
-		return this._currentPage;
-	}
+	get current(): CardSet[] { return this._cache.get(this._currentPage) ?? []; 	} 	/** Results for the current page. */
+	get currentPageNumber(): number { return this._currentPage; } 	                  /** 1-based current page number. */
 
 	/**
 	 * True when the current page returned a full page of results, suggesting
 	 * there are more pages beyond it.
 	 */
-	get hasNext(): boolean {
-		return (
-			(this._cache.get(this._currentPage)?.length ?? 0) >= this._pageSize
-		);
-	}
-
-	/** True when there is a previous page. */
-	get hasPrev(): boolean {
-		return this._currentPage > 1;
-	}
-
-	/** Page numbers currently held in the window (for inspection / debugging). */
-	get windowPages(): readonly number[] {
-		return this._windowPages;
-	}
+	get hasNext(): boolean { return ( (this._cache.get(this._currentPage)?.length ?? 0) >= this._pageSize ); }
+	get hasPrev(): boolean { return this._currentPage > 1; }            /** True when there is a previous page. */
+	get windowPages(): readonly number[] { return this._windowPages; }  /** Page numbers currently held in the window (for inspection / debugging). */
 
 	/**
 	 * Advance to the next page and return its results.
@@ -416,18 +393,11 @@ export class CardPaginator {
 	async next(): Promise<CardSet[]> {
 		if (!this.hasNext) return this.current;
 
-		// Ensure any in-flight slide has settled before we navigate.
-		if (this._pendingSlide) await this._pendingSlide;
-
 		this._currentPage++;
 
 		const windowEnd = this._windowPages[this._windowPages.length - 1];
-		if (this._currentPage >= windowEnd - 1) {
-			// Current page is now the 4th (or later) in the window → slide forward.
-			this._pendingSlide = this._slideForward().finally(() => {
-				this._pendingSlide = null;
-			});
-		}
+		if (this._currentPage >= windowEnd - 1) {	this._slideForward();} 			                 // 4th or later slot in the window → slide forward in the background.
+		if (!this._cache.has(this._currentPage)) { await this._fetchPage(this._currentPage); } // In normal flow the page is already cached; guard against edge cases.
 
 		return this.current;
 	}
@@ -440,17 +410,11 @@ export class CardPaginator {
 	async prev(): Promise<CardSet[]> {
 		if (!this.hasPrev) return this.current;
 
-		if (this._pendingSlide) await this._pendingSlide;
-
 		this._currentPage--;
 
 		const windowStart = this._windowPages[0];
-		if (this._currentPage <= windowStart + 1 && windowStart > 1) {
-			// Current page is now the 2nd (or earlier) in the window → slide backward.
-			this._pendingSlide = this._slideBackward().finally(() => {
-				this._pendingSlide = null;
-			});
-		}
+		if (this._currentPage <= windowStart + 1 && windowStart > 1) { this._slideBackward();	}  // 2nd or earlier slot in the window → slide backward in the background.
+		if (!this._cache.has(this._currentPage)) { await this._fetchPage(this._currentPage); }   // In normal flow the page is already cached; guard against edge cases.
 
 		return this.current;
 	}

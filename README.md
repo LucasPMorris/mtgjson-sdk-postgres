@@ -416,10 +416,7 @@ const sdk = await MtgjsonSDK.create();
 await sdk.cards.count();
 
 // Parameterized queries
-const rows = await sdk.sql(
-  "SELECT name, setCode, rarity FROM cards WHERE manaValue <= $1 AND rarity = $2",
-  [2, "mythic"]
-);
+const rows = await sdk.sql( "SELECT name, setCode, rarity FROM cards WHERE manaValue <= $1 AND rarity = $2", [2, "mythic"] );
 
 // Complex analytics
 const stats = await sdk.sql(`
@@ -542,6 +539,14 @@ bun test --watch
 ```bash
 bun run lint
 bun run format
+```
+
+### Additional Functions
+
+```typescript
+sdk.enums.keywords() 
+sdk.checkForUpdates()	    // 1 — fetches SetList.json (~50 KB)
+sdk.update()	            // 1 per new set only ({CODE}.json)
 ```
 
 ## License
