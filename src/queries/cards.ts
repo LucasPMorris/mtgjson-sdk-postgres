@@ -256,4 +256,202 @@ export class CardQuery {
 		const [sql, params] = q.build();
 		return ((await this._conn.executeScalar(sql, params)) as number) ?? 0;
 	}
+
+	/**
+	 * Create a sliding-window paginator for the given search options.
+	 * The first `pageSize` pages are pre-fetched in parallel on creation.
+	 *
+	 * @param opts   Search filters (limit/offset are managed by the paginator).
+	 * @param pageSize  Number of cards per page (default 20).
+	 */
+	async paginate(
+		opts?: Omit<SearchOptions, "limit" | "offset">,
+		pageSize = 20,
+	): Promise<CardPaginator> {
+		return CardPaginator.create(this, opts, pageSize);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Sliding-window paginator
+// ---------------------------------------------------------------------------
+
+const PAGINATOR_WINDOW_SIZE = 5;
+
+/**
+ * Maintains a sliding window of `PAGINATOR_WINDOW_SIZE` (5) pre-fetched pages.
+ *
+ * Sliding rules (window of 5):
+ *   - Moving forward: when the user reaches the 4th page in the window, the
+ *     next page is fetched in the background and page 1 of the window is evicted.
+ *   - Moving backward: when the user reaches the 2nd page in the window (and
+ *     there are earlier pages), the previous page is fetched in the background
+ *     and the last page of the window is evicted.
+ *
+ * Example forward walk:
+ *   load         →  window [1,2,3,4,5]  current=1
+ *   next()       →  window [1,2,3,4,5]  current=2
+ *   next()       →  window [1,2,3,4,5]  current=3
+ *   next()       →  window [1,2,3,4,5]  current=4  → bg-fetch p6, evict p1
+ *   next()       →  window [2,3,4,5,6]  current=5  → bg-fetch p7, evict p2
+ */
+export class CardPaginator {
+	private _query: CardQuery;
+	private _opts: Omit<SearchOptions, "limit" | "offset">;
+	private _pageSize: number;
+	/** page-number → results */
+	private _cache: Map<number, CardSet[]>;
+	/** Ordered list of page numbers currently held in the window. */
+	private _windowPages: number[];
+	private _currentPage: number;
+	/** In-flight slide operation, if any. */
+	private _pendingSlide: Promise<void> | null = null;
+
+	private constructor(
+		query: CardQuery,
+		opts: Omit<SearchOptions, "limit" | "offset">,
+		pageSize: number,
+	) {
+		this._query = query;
+		this._opts = opts;
+		this._pageSize = pageSize;
+		this._cache = new Map();
+		this._windowPages = [];
+		this._currentPage = 1;
+	}
+
+	/** Create and initialise a paginator, pre-fetching the first window of pages. */
+	static async create(
+		query: CardQuery,
+		opts?: Omit<SearchOptions, "limit" | "offset">,
+		pageSize = 20,
+	): Promise<CardPaginator> {
+		const p = new CardPaginator(query, opts ?? {}, pageSize);
+		await p._initWindow();
+		return p;
+	}
+
+	private async _fetchPage(pageNum: number): Promise<void> {
+		if (this._cache.has(pageNum)) return;
+		const offset = (pageNum - 1) * this._pageSize;
+		const results = await this._query.search({
+			...this._opts,
+			limit: this._pageSize,
+			offset,
+		});
+		this._cache.set(pageNum, results);
+	}
+
+	private async _initWindow(): Promise<void> {
+		await Promise.all(
+			Array.from({ length: PAGINATOR_WINDOW_SIZE }, (_, i) =>
+				this._fetchPage(i + 1),
+			),
+		);
+		this._windowPages = Array.from(
+			{ length: PAGINATOR_WINDOW_SIZE },
+			(_, i) => i + 1,
+		);
+		this._currentPage = 1;
+	}
+
+	private async _slideForward(): Promise<void> {
+		const nextPage =
+			this._windowPages[this._windowPages.length - 1] + 1;
+		await this._fetchPage(nextPage);
+		const evicted = this._windowPages.shift()!;
+		this._cache.delete(evicted);
+		this._windowPages.push(nextPage);
+	}
+
+	private async _slideBackward(): Promise<void> {
+		const windowStart = this._windowPages[0];
+		if (windowStart <= 1) return;
+		const prevPage = windowStart - 1;
+		await this._fetchPage(prevPage);
+		const evicted = this._windowPages.pop()!;
+		this._cache.delete(evicted);
+		this._windowPages.unshift(prevPage);
+	}
+
+	// -----------------------------------------------------------------------
+	// Public API
+	// -----------------------------------------------------------------------
+
+	/** Results for the current page. */
+	get current(): CardSet[] {
+		return this._cache.get(this._currentPage) ?? [];
+	}
+
+	/** 1-based current page number. */
+	get currentPageNumber(): number {
+		return this._currentPage;
+	}
+
+	/**
+	 * True when the current page returned a full page of results, suggesting
+	 * there are more pages beyond it.
+	 */
+	get hasNext(): boolean {
+		return (
+			(this._cache.get(this._currentPage)?.length ?? 0) >= this._pageSize
+		);
+	}
+
+	/** True when there is a previous page. */
+	get hasPrev(): boolean {
+		return this._currentPage > 1;
+	}
+
+	/** Page numbers currently held in the window (for inspection / debugging). */
+	get windowPages(): readonly number[] {
+		return this._windowPages;
+	}
+
+	/**
+	 * Advance to the next page and return its results.
+	 * If the current page is the last one, the current page is returned unchanged.
+	 * The window slides forward in the background when needed.
+	 */
+	async next(): Promise<CardSet[]> {
+		if (!this.hasNext) return this.current;
+
+		// Ensure any in-flight slide has settled before we navigate.
+		if (this._pendingSlide) await this._pendingSlide;
+
+		this._currentPage++;
+
+		const windowEnd = this._windowPages[this._windowPages.length - 1];
+		if (this._currentPage >= windowEnd - 1) {
+			// Current page is now the 4th (or later) in the window → slide forward.
+			this._pendingSlide = this._slideForward().finally(() => {
+				this._pendingSlide = null;
+			});
+		}
+
+		return this.current;
+	}
+
+	/**
+	 * Go back to the previous page and return its results.
+	 * If already on the first page, the current page is returned unchanged.
+	 * The window slides backward in the background when needed.
+	 */
+	async prev(): Promise<CardSet[]> {
+		if (!this.hasPrev) return this.current;
+
+		if (this._pendingSlide) await this._pendingSlide;
+
+		this._currentPage--;
+
+		const windowStart = this._windowPages[0];
+		if (this._currentPage <= windowStart + 1 && windowStart > 1) {
+			// Current page is now the 2nd (or earlier) in the window → slide backward.
+			this._pendingSlide = this._slideBackward().finally(() => {
+				this._pendingSlide = null;
+			});
+		}
+
+		return this.current;
+	}
 }

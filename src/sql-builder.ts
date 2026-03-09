@@ -114,9 +114,7 @@ export class SQLBuilder {
 	having(condition: string, ...params: unknown[]): this {
 		const offset = this._params.length;
 		let remapped = condition;
-		for (let i = params.length; i >= 1; i--) {
-			remapped = remapped.replaceAll(`$${i}`, `$${offset + i}`);
-		}
+		for (let i = params.length; i >= 1; i--) { remapped = remapped.replaceAll(`$${i}`, `$${offset + i}`); }
 		this._having.push(remapped);
 		this._params.push(...params);
 		return this;

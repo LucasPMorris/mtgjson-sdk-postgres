@@ -1,4 +1,4 @@
-export { CardQuery } from "./cards.js";
+export { CardQuery, CardPaginator } from "./cards.js";
 export { SetQuery } from "./sets.js";
 export { TokenQuery } from "./tokens.js";
 export { PriceQuery } from "./prices.js";

@@ -3,6 +3,7 @@ export type { MtgjsonSDKOptions } from "./client.js";
 
 export {
 	CardQuery,
+	CardPaginator,
 	SetQuery,
 	TokenQuery,
 	PriceQuery,
