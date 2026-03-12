@@ -251,6 +251,7 @@ LEFT JOIN token_identifiers ti ON ti.uuid = t.uuid;
 
 CREATE UNIQUE INDEX idx_v_tokens_uuid        ON v_tokens (uuid);
 CREATE        INDEX idx_v_tokens_set_code    ON v_tokens (set_code);
+CREATE        INDEX idx_v_tokens_set_name    ON v_tokens (set_name);
 CREATE        INDEX idx_v_tokens_name        ON v_tokens (name);
 CREATE        INDEX idx_v_tokens_scryfall_id ON v_tokens (identifiers_scryfall_id);
 CREATE        INDEX idx_v_tokens_color_identity ON v_tokens USING GIN (color_identity);

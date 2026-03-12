@@ -266,6 +266,7 @@ export type CardToken = {
   relatedCards?: RelatedCards;
   securityStamp?: string;
   setCode: string;
+  setName: string;
   side?: string;
   signature?: string;
   sourceProducts?: string[];

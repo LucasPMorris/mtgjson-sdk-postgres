@@ -137,6 +137,9 @@ export async function applySetUpdates(
 		for (const card of response.data.cards) {
 			card.setName = card.setName ?? setName;
 		}
+		for (const token of response.data.tokens) {
+			token.setName = token.setName ?? setName;
+		}
 
 		const { cards, tokens } = await seedSingleSet(connectionUrl, response.data);
 

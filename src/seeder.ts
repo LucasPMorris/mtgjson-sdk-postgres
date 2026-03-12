@@ -219,12 +219,12 @@ function buildCardRows(cards: CardSet[], setName: string) {
 	return { cardRows, identifierRows, legalityRows, foreignDataRows, rulingRows, purchaseUrlRows };
 }
 
-function buildTokenRows(tokens: CardToken[]) {
+function buildTokenRows(tokens: CardToken[], setName: string) {
 	const tokenRows: AnyRow[] = [], identifierRows: AnyRow[] = [];
 	for (const token of tokens) {
 		const t = token as CardToken & AnyRow;
 		tokenRows.push({
-			uuid: token.uuid, set_code: token.setCode, artist: token.artist ?? null, artist_ids: token.artistIds ?? null,
+			uuid: token.uuid, set_code: token.setCode, set_name: token.setName ?? setName, artist: token.artist ?? null, artist_ids: token.artistIds ?? null,
 			ascii_name: token.asciiName ?? null, attraction_lights: token.attractionLights ?? null,
 			availability: token.availability, booster_types: token.boosterTypes ?? null, border_color: token.borderColor,
 			card_parts: token.cardParts ?? null, color_identity: token.colorIdentity, color_indicator: token.colorIndicator ?? null,
@@ -331,7 +331,7 @@ async function processSet(tx: any, set: MTGSet, junctions: JunctionData): Promis
 		await batchInsert(tx, "card_purchase_urls", c.purchaseUrlRows);
 	}
 	if (set.tokens.length > 0) {
-		const t = buildTokenRows(set.tokens);
+		const t = buildTokenRows(set.tokens, set.name);
 		await batchInsert(tx, "tokens",            t.tokenRows);
 		await batchInsert(tx, "token_identifiers", t.identifierRows);
 	}

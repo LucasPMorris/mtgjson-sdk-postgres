@@ -38,11 +38,11 @@ type SearchOptions = {
 	keywordAbilities?: string[];
 	keywordActions?: string[];
 	keywordOperator?: KeywordOperator;
-	isPromo?: boolean;
-	isOversized?: boolean;
-	isOnlineOnly?: boolean;
-	isToken?: boolean;
-	isArtSeries?: boolean;
+	isPromo?: boolean | 'only';
+	isOversized?: boolean | 'only';
+	isOnlineOnly?: boolean | 'only';
+	isToken?: boolean | 'only';
+	isArtSeries?: boolean | 'only';
 	availability?: string;
 	language?: string;
 	layout?: string;
@@ -116,21 +116,38 @@ export class CardQuery {
 		if (opts.artist) q.whereLike("artist", `%${opts.artist}%`);
 		if (opts.language) q.whereEq("language", opts.language);
 		if (opts.layout) q.whereEq("layout", opts.layout);
-		// Boolean include filters — omitted or false (default) excludes that category; true lifts the exclusion.
-		if (opts.isPromo !== true)     q._where.push("(is_promo IS NULL OR is_promo = FALSE)");
-		if (opts.isOversized !== true)  q._where.push("(is_oversized IS NULL OR is_oversized = FALSE)");
-		if (opts.isOnlineOnly !== true) q._where.push("(is_online_only IS NULL OR is_online_only = FALSE)");
+		// Boolean include filters:
+		//   undefined / false → exclude (default)
+		//   true              → lift the exclusion (include alongside other results)
+		//   'only'            → positive inclusion (WHERE field = true); multiple 'only' values are OR'd
+		const onlyConditions: string[] = [];
+
+		if (opts.isPromo === 'only')      onlyConditions.push("is_promo = true");
+		else if (opts.isPromo !== true)    q._where.push("(is_promo IS NULL OR is_promo = FALSE)");
+
+		if (opts.isOversized === 'only')      onlyConditions.push("is_oversized = true");
+		else if (opts.isOversized !== true)    q._where.push("(is_oversized IS NULL OR is_oversized = FALSE)");
+
+		if (opts.isOnlineOnly === 'only')      onlyConditions.push("is_online_only = true");
+		else if (opts.isOnlineOnly !== true)    q._where.push("(is_online_only IS NULL OR is_online_only = FALSE)");
 
 		// Layout-based include filters — excluded by default; only applied when layout is not explicitly set
 		if (!opts.layout) {
+			if (opts.isToken === 'only')        onlyConditions.push("layout = 'token'");
+			if (opts.isArtSeries === 'only')    onlyConditions.push("layout = 'art_series'");
+
 			const layoutExcludes: string[] = [];
-			if (opts.isToken !== true)    layoutExcludes.push("token");
-			if (opts.isArtSeries !== true) layoutExcludes.push("art_series");
+			if (opts.isToken !== true && opts.isToken !== 'only')          layoutExcludes.push("token");
+			if (opts.isArtSeries !== true && opts.isArtSeries !== 'only')  layoutExcludes.push("art_series");
 			if (layoutExcludes.length > 0) {
 				const placeholders = layoutExcludes.map((_, i) => `$${q._params.length + i + 1}`).join(", ");
 				q._where.push(`layout NOT IN (${placeholders})`);
 				q._params.push(...layoutExcludes);
 			}
+		}
+
+		if (onlyConditions.length > 0) {
+			q._where.push(`(${onlyConditions.join(" OR ")})`);
 		}
 
 		for (const color of opts.colors ?? []) {

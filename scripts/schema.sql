@@ -558,6 +558,7 @@ CREATE INDEX idx_card_source_products_sealed_product_uuid ON card_source_product
 CREATE TABLE tokens (
     uuid              TEXT    PRIMARY KEY,
     set_code          TEXT    NOT NULL,
+    set_name          TEXT    NOT NULL,
     artist            TEXT,
     artist_ids        TEXT[],
     ascii_name        TEXT,
@@ -614,6 +615,7 @@ CREATE TABLE tokens (
 );
 
 CREATE INDEX idx_tokens_set_code       ON tokens (set_code);
+CREATE INDEX idx_tokens_set_name       ON tokens (set_name);
 CREATE INDEX idx_tokens_name           ON tokens (name);
 CREATE INDEX idx_tokens_color_identity ON tokens USING GIN (color_identity);
 CREATE INDEX idx_tokens_colors         ON tokens USING GIN (colors);
