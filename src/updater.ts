@@ -11,28 +11,20 @@ import type { Set as MTGSet } from "./types/index.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export interface SetListEntry {	code: string; name: string; releaseDate: string | null; type: string;
-	totalSetSize: number;
-}
 /** Minimal shape of a SetList.json entry — only what we need for comparison. */
-export interface UpdateCheckResult {
-	/** Sets present in MTGJSON but absent from the database. */
-	newSets: SetListEntry[];
+export interface SetListEntry {	code: string; name: string; releaseDate: string | null; type: string;	totalSetSize: number; }
+
+/** Sets present in MTGJSON but absent from the database. */
 	/**
 	 * Sets already in the database whose release date is in the future and whose
 	 * totalSetSize in MTGJSON has grown since we last seeded them. These need a
 	 * re-seed to pick up spoiler/preview cards added since the last update.
 	 */
-	staleSets: SetListEntry[];
-	mtgjsonVersion: string;
-	mtgjsonDate:    string;
-}
+export interface UpdateCheckResult { newSets: SetListEntry[]; staleSets: SetListEntry[]; mtgjsonVersion: string; mtgjsonDate: string; }
 export interface UpdateProgress {	setCode: string; setName: string; done: number; total: number; cards: number; tokens: number; }
-export interface UpdateResult {	addedSets: string[];
+
 	/** Sets that already existed but had new cards seeded into them (preview/spoiler growth). */
-	updatedSets: string[];
-	totalCards:  number; totalTokens: number;
-}
+export interface UpdateResult {	addedSets: string[]; updatedSets: string[]; totalCards: number; totalTokens: number; }
 
 // ── HTTP helper ───────────────────────────────────────────────────────────────
 
@@ -141,6 +133,10 @@ export async function applySetUpdates(
 
 		// Fetch individual set file from CDN
 		const response = await fetchJson<{ meta: Record<string, string>; data: MTGSet }>(`${CDN_BASE}/${entry.code}.json`, timeout );
+		const setName = response.data.name ?? entry.name;
+		for (const card of response.data.cards) {
+			card.setName = card.setName ?? setName;
+		}
 
 		const { cards, tokens } = await seedSingleSet(connectionUrl, response.data);
 
@@ -149,7 +145,7 @@ export async function applySetUpdates(
 		totalCards  += cards;
 		totalTokens += tokens;
 
-		onProgress?.({ setCode: entry.code, setName: response.data.name ?? entry.name, done: i + 1, total: allEntries.length, cards, tokens });
+		onProgress?.({ setCode: entry.code, setName, done: i + 1, total: allEntries.length, cards, tokens });
 	}
 
 	return { addedSets, updatedSets, totalCards, totalTokens };

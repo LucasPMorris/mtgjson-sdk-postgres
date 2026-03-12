@@ -5,10 +5,7 @@ import { CardQuery, DeckQuery, EnumQuery, IdentifierQuery, LegalityQuery, PriceQ
 import { checkForSetUpdates, applySetUpdates, type UpdateCheckResult, type UpdateResult, type UpdateProgress } from "./updater.js";
 
 /** PostgreSQL connection URL. Falls back to DATABASE_URL env var. */
-export interface MtgjsonSDKOptions { databaseUrl?: string; cacheDir?: string; offline?: boolean; timeout?: number;	onProgress?: ProgressCallback;
-	/** How often to re-check the CDN for a new MTGJSON version (ms). Default: 1 hour. */
-	staleCheckTtlMs?: number;
-}
+export interface MtgjsonSDKOptions { databaseUrl?: string; cacheDir?: string; offline?: boolean; timeout?: number;	onProgress?: ProgressCallback; staleCheckTtlMs?: number; }
 
 export class MtgjsonSDK {
 	private _cache: CacheManager;
@@ -105,9 +102,7 @@ export class MtgjsonSDK {
 	 * Check MTGJSON's SetList.json and return any set codes not yet in the database.
 	 * Makes a single CDN request (SetList.json is the lightweight manifest).
 	 */
-	async checkForUpdates(): Promise<UpdateCheckResult> {
-		return checkForSetUpdates(this._connectionUrl);
-	}
+	async checkForUpdates(): Promise<UpdateCheckResult> {	return checkForSetUpdates(this._connectionUrl); }
 
 	/**
 	 * Download and seed any sets present in MTGJSON but absent from the database.
@@ -116,16 +111,10 @@ export class MtgjsonSDK {
 	 * @param options.sets   Explicit set codes to add — skips the SetList check.
 	 * @param options.onProgress  Called after each set is seeded.
 	 */
-	async update(options?: {
-		sets?: string[];
-		timeout?: number;
-		onProgress?: (progress: UpdateProgress) => void;
-	}): Promise<UpdateResult> {
-		return applySetUpdates(this._connectionUrl, options);
-	}
+	async update(options?: { sets?: string[];	timeout?: number;	onProgress?: (progress: UpdateProgress) => void; }): Promise<UpdateResult> { return applySetUpdates(this._connectionUrl, options); }
 
 	async close(): Promise<void> {
-		await this._conn.close();
+  	await this._conn.close();
 		this._cache.close();
 	}
 

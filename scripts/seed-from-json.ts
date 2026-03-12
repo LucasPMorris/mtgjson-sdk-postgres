@@ -293,7 +293,7 @@ function buildDeckRows(setCode: string, decks: DeckSet[]) {
 	return { deckRows, deckCardRows };
 }
 
-function buildCardRows(cards: CardSet[]) {
+function buildCardRows(cards: CardSet[], setName: string) {
 	const cardRows: AnyRow[] = [];
 	const identifierRows: AnyRow[] = [];
 	const legalityRows: AnyRow[] = [];
@@ -308,6 +308,7 @@ function buildCardRows(cards: CardSet[]) {
 		cardRows.push({
 			uuid:                       card.uuid,
 			set_code:                   card.setCode,
+			set_name:                   (c.setName as string | undefined) ?? setName,
 			artist:                     card.artist                  ?? null,
 			artist_ids:                 card.artistIds               ?? null,
 			ascii_name:                 card.asciiName               ?? null,
@@ -557,7 +558,7 @@ async function processSet(tx: any, set: MTGSet, junctions: JunctionData): Promis
 
 	// 6. Cards + sub-tables (FK: sets, then FK: cards for sub-tables)
 	if (set.cards.length > 0) {
-		const c = buildCardRows(set.cards);
+		const c = buildCardRows(set.cards, set.name);
 		await batchInsert(tx, "cards",            c.cardRows);
 		await batchInsert(tx, "card_identifiers", c.identifierRows);
 		await batchInsert(tx, "card_legalities",  c.legalityRows);

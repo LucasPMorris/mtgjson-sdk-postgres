@@ -156,85 +156,101 @@ export class CardQuery {
 		}
 
 		if (opts.localizedName) {
-			q.select("cards.*");
-			q.join("JOIN card_foreign_data cfd ON cards.uuid = cfd.uuid");
-			if (opts.localizedName.includes("%")) {	q.whereLike("cfd.name", opts.localizedName); } 
-      else { q.whereEq("cfd.name", opts.localizedName); }
+			q.select("v_cards.*");
+			q.join("JOIN card_foreign_data cfd ON v_cards.uuid = cfd.uuid");
+			if (opts.localizedName.includes("%")) {	q.whereLike("cfd.name", opts.localizedName); }
+			else { q.whereEq("cfd.name", opts.localizedName); }
 		}
 
 		if (opts.legalIn) {
 			const fmt = opts.legalIn.toLowerCase();
 			if (KNOWN_FORMATS.has(fmt)) {
-				q.join("JOIN card_legalities cl ON cards.uuid = cl.uuid");
-				q._where.push(`cl.${fmt} = 'Legal'`);
+				// v_cards already has legalities as JSONB — no join needed.
+				q._where.push(`legalities->>'${fmt}' = 'Legal'`);
 			}
 		}
 
 		if (opts.setType) {
-			q.select("cards.*");
-			q.join("JOIN sets s ON cards.set_code = s.code");
+			q.select("v_cards.*");
+			q.join("JOIN sets s ON v_cards.set_code = s.code");
 			q.whereEq("s.type", opts.setType);
 		}
 	}
 
+	/**
+	 * After snakeToCamel, v_cards exposes flat prefixed keys for nested objects:
+	 *   identifiers_scryfall_id   → identifiersScryfallId  → identifiers.scryfallId
+	 *   purchase_urls_card_kingdom → purchaseUrlsCardKingdom → purchaseUrls.cardKingdom
+	 * This helper lifts those into their proper nested objects.
+	 * All other columns (legalities, leadershipSkills, rulings, foreignData,
+	 * relatedCards, sourceProducts) are already proper JSONB objects in v_cards
+	 * and pass through unchanged after snakeToCamel.
+	 */
+	private _liftRow(row: Record<string, unknown>): Record<string, unknown> {
+		const identifiers: Record<string, unknown> = {};
+		const purchaseUrls: Record<string, unknown> = {};
+		const out: Record<string, unknown> = {};
+		for (const [key, val] of Object.entries(row)) {
+			if (key.length > 11 && key.startsWith("identifiers") && /[A-Z]/.test(key[11])) {
+				identifiers[key[11].toLowerCase() + key.slice(12)] = val;
+			} else if (key.length > 12 && key.startsWith("purchaseUrls") && /[A-Z]/.test(key[12])) {
+				purchaseUrls[key[12].toLowerCase() + key.slice(13)] = val;
+			} else {
+				out[key] = val;
+			}
+		}
+		out.identifiers = identifiers;
+		out.purchaseUrls = purchaseUrls;
+		return out;
+	}
+
 	async getByUuid(uuid: string): Promise<CardSet | null> {
-		const rows = await this._conn.execute(
-			"SELECT * FROM cards WHERE uuid = $1",
-			[uuid],
-		);
-		return (rows[0] as CardSet) ?? null;
+		const rows = await this._conn.execute("SELECT * FROM v_cards WHERE uuid = $1", [uuid]);
+		return rows.length ? (this._liftRow(rows[0]) as CardSet) : null;
 	}
 
 	async getByUuids(uuids: string[]): Promise<CardSet[]> {
 		if (uuids.length === 0) return [];
-		const q = new SQLBuilder("cards").whereIn("uuid", uuids);
+		const q = new SQLBuilder("v_cards").whereIn("uuid", uuids);
 		const [sql, params] = q.build();
-		return (await this._conn.execute(sql, params)) as CardSet[];
+		const rows = await this._conn.execute(sql, params);
+		return rows.map(r => this._liftRow(r)) as CardSet[];
 	}
 
-	async getByName(
-		name: string,
-		options?: { setCode?: string },
-	): Promise<CardSet[]> {
-		const q = new SQLBuilder("cards").whereEq("name", name);
+	async getByName( name: string, options?: { setCode?: string } ): Promise<CardSet[]> {
+		const q = new SQLBuilder("v_cards").whereEq("name", name);
 		if (options?.setCode) q.whereEq("set_code", options.setCode);
 		q.orderBy("set_code DESC", "number ASC");
 		const [sql, params] = q.build();
-		return (await this._conn.execute(sql, params)) as CardSet[];
+		return (await this._conn.execute(sql, params)).map(r => this._liftRow(r)) as CardSet[];
 	}
 
 	async search(options?: SearchOptions): Promise<CardSet[]> {
-		const q = new SQLBuilder("cards");
+		const q = new SQLBuilder("v_cards");
 		const opts = options ?? {};
 		const limit = opts.limit ?? 100;
 		const offset = opts.offset ?? 0;
 
 		this._applyFilters(q, opts);
-		q.orderBy("cards.name ASC", "cards.number ASC");
+		q.orderBy("v_cards.name ASC", "v_cards.number ASC");
 		q.limit(limit).offset(offset);
 
 		const [sql, params] = q.build();
-		return (await this._conn.execute(sql, params)) as CardSet[];
+		return (await this._conn.execute(sql, params)).map(r => this._liftRow(r)) as CardSet[];
 	}
 
 	async getPrintings(name: string): Promise<CardSet[]> { return this.getByName(name); }
 
 	async getAtomic(name: string): Promise<CardAtomic[]> {
-		const atomicCols = [ "name",  "hand",   "colors",  "subsets",  "ascii_name", "is_funny",  "mana_value", "subtypes",    "color_identity",  "edhrec_saltiness",  "has_alternative_deck_limit", "leadership_brawl",
-                         "text",  "life",   "layout",  "types",    "toughness",  "face_name", "printings",  "is_reserved", "face_mana_value", "is_game_changer",   "face_converted_mana_cost",   "leadership_commander",
-                         "type",  "side",   "power",   "loyalty",  "keywords",   "defense",   "mana_cost",  "supertypes",  "edhrec_rank",     "color_indicator",   "leadership_oathbreaker" ];
-
-		const q = new SQLBuilder("cards");
-		q.select(...atomicCols);
+		const q = new SQLBuilder("v_cards");
 		q.whereEq("name", name);
-		q.orderBy("is_funny ASC NULLS FIRST", "is_online_only ASC NULLS FIRST", "side ASC NULLS FIRST" );
+		q.orderBy("is_funny ASC NULLS FIRST", "is_online_only ASC NULLS FIRST", "side ASC NULLS FIRST");
 		const [sql, params] = q.build();
-		let rows = await this._conn.execute(sql, params);
+		let rows = (await this._conn.execute(sql, params)).map(r => this._liftRow(r));
 
 		// Fallback: search by face_name for split/adventure/MDFC cards
 		if (rows.length === 0) {
-			const q2 = new SQLBuilder("cards");
-			q2.select(...atomicCols);
+			const q2 = new SQLBuilder("v_cards");
 			q2.whereEq("face_name", name);
 			q2.orderBy(
 				"is_funny ASC NULLS FIRST",
@@ -242,7 +258,7 @@ export class CardQuery {
 				"side ASC NULLS FIRST",
 			);
 			const [sql2, params2] = q2.build();
-			rows = await this._conn.execute(sql2, params2);
+			rows = (await this._conn.execute(sql2, params2)).map(r => this._liftRow(r));
 		}
 
 		if (rows.length === 0) return [];
@@ -261,21 +277,18 @@ export class CardQuery {
 	}
 
 	async findByScryfallId(scryfallId: string): Promise<CardSet[]> {
-		const sql =
-			"SELECT c.* FROM cards c " +
-			"JOIN card_identifiers ci ON c.uuid = ci.uuid " +
-			"WHERE ci.scryfall_id = $1";
-		return (await this._conn.execute(sql, [scryfallId])) as CardSet[];
+		const sql = "SELECT * FROM v_cards WHERE identifiers_scryfall_id = $1";
+		return (await this._conn.execute(sql, [scryfallId])).map(r => this._liftRow(r)) as CardSet[];
 	}
 
 	async random(count = 1): Promise<CardSet[]> {
-		const sql = `SELECT * FROM cards ORDER BY RANDOM() LIMIT ${count}`;
-		return (await this._conn.execute(sql)) as CardSet[];
+		const sql = `SELECT * FROM v_cards ORDER BY RANDOM() LIMIT ${count}`;
+		return (await this._conn.execute(sql)).map(r => this._liftRow(r)) as CardSet[];
 	}
 
 	/** Count cards matching the given search options (same filters as search()). */
 	async count(options?: SearchOptions): Promise<number> {
-		const q = new SQLBuilder("cards").select("COUNT(*)");
+		const q = new SQLBuilder("v_cards").select("COUNT(*)");
 		this._applyFilters(q, options ?? {});
 		const [sql, params] = q.build();
 		return ((await this._conn.executeScalar(sql, params)) as number) ?? 0;

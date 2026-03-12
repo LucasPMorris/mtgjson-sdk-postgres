@@ -4,15 +4,9 @@ import { SQLBuilder } from "../sql-builder.js";
 export class SealedQuery {
 	private _conn: Connection;
 
-	constructor(conn: Connection) {
-		this._conn = conn;
-	}
+	constructor(conn: Connection) { this._conn = conn; }
 
-	async list(options?: {
-		setCode?: string;
-		category?: string;
-		limit?: number;
-	}): Promise<Record<string, unknown>[]> {
+	async list(options?: { setCode?: string; category?: string; limit?: number; }): Promise<Record<string, unknown>[]> {
 		const q = new SQLBuilder("sealed_product");
 
 		if (options?.setCode) q.whereEq("set_code", options.setCode.toUpperCase());
@@ -26,10 +20,7 @@ export class SealedQuery {
 	}
 
 	async get(uuid: string): Promise<Record<string, unknown> | null> {
-		const rows = await this._conn.execute(
-			"SELECT * FROM sealed_product WHERE uuid = $1 LIMIT 1",
-			[uuid],
-		);
+		const rows = await this._conn.execute( "SELECT * FROM sealed_product WHERE uuid = $1 LIMIT 1", [uuid] );
 		return rows[0] ?? null;
 	}
 }

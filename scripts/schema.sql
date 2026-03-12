@@ -276,6 +276,7 @@ CREATE INDEX idx_set_deck_cards_uuid      ON set_deck_cards (uuid);
 CREATE TABLE cards (
     uuid                      TEXT     PRIMARY KEY,
     set_code                  TEXT     NOT NULL,
+    set_name                  TEXT     NOT NULL,
     artist                    TEXT,
     artist_ids                TEXT[],
     ascii_name                TEXT,
@@ -357,6 +358,7 @@ CREATE TABLE cards (
 );
 
 CREATE INDEX idx_cards_set_code       ON cards (set_code);
+CREATE INDEX idx_cards_set_name       ON cards (set_name);
 CREATE INDEX idx_cards_name           ON cards (name);
 CREATE INDEX idx_cards_mana_value     ON cards (mana_value);
 CREATE INDEX idx_cards_rarity         ON cards (rarity);

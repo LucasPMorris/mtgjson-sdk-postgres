@@ -17,34 +17,11 @@ import type { CardSet, CardToken, DeckSet, Identifiers, LeadershipSkills, Legali
 
 type AnyRow = Record<string, unknown>;
 
-interface JunctionData {
-	cardRelatedCards:    AnyRow[];
-	tokenRelatedCards:   AnyRow[];
-	cardSourceProducts:  AnyRow[];
-	tokenSourceProducts: AnyRow[];
-}
+interface JunctionData { cardRelatedCards: AnyRow[]; tokenRelatedCards: AnyRow[];	cardSourceProducts:  AnyRow[];	tokenSourceProducts: AnyRow[]; }
 
-export interface SeedProgress {
-	setCode:     string;
-	setCount:    number;
-	cardCount:   number;
-	tokenCount:  number;
-}
-
-export interface SeedResult {
-	version:     string;
-	date:        string;
-	sets:        number;
-	cards:       number;
-	tokens:      number;
-}
-
-export interface SeedOptions {
-	/** Directory containing schema.sql and relations.sql.
-	 *  Defaults to the `scripts/` directory bundled with the SDK package. */
-	schemaDir?: string;
-	onProgress?: (progress: SeedProgress) => void;
-}
+export interface SeedProgress {	setCode: string; setCount: number; cardCount: number;	tokenCount: number; }
+export interface SeedResult {	version: string; date: string; sets: number; cards: number;	tokens: number; }
+export interface SeedOptions { schemaDir?: string; onProgress?: (progress: SeedProgress) => void; } 	/** Directory containing schema.sql and relations.sql.*  Defaults to the `scripts/` directory bundled with the SDK package. */
 
 // ── Default schema directory (resolved relative to the compiled dist file) ────
 function defaultSchemaDir(): string {
@@ -95,6 +72,7 @@ function transformPurchaseUrl(url: string | undefined, uuid: string, merchant: s
 	if (!url) return null;
 	return MTGJSON_LINK_RE.test(url) ? `/links/${uuid}/${merchant}` : url;
 }
+
 function mapPurchaseUrls(urls: PurchaseUrls | undefined, uuid: string): AnyRow {
 	const t = (url: string | undefined, m: string) => transformPurchaseUrl(url, uuid, m);
 	return {
@@ -107,6 +85,7 @@ function mapPurchaseUrls(urls: PurchaseUrls | undefined, uuid: string): AnyRow {
 		tcgplayer_etched:           t(urls?.tcgplayerEtched,          "tcgplayerEtched"),
 	};
 }
+
 function mapLegalities(legalities: Legalities | undefined): AnyRow {
 	return {
 		alchemy: legalities?.alchemy ?? null, brawl: legalities?.brawl ?? null, commander: legalities?.commander ?? null,
@@ -151,6 +130,7 @@ function buildTranslationRows(set: MTGSet): AnyRow[] {
 		.filter(([, t]) => !!t)
 		.map(([language, translation]) => ({ code: set.code, language, translation }));
 }
+
 function buildSealedProductRows(setCode: string, sps: SealedProduct[]) {
 	const products: AnyRow[] = [], identifiers: AnyRow[] = [], purchaseUrls: AnyRow[] = [], contents: AnyRow[] = [];
 	for (const sp of sps) {
@@ -165,6 +145,7 @@ function buildSealedProductRows(setCode: string, sps: SealedProduct[]) {
 	}
 	return { products, identifiers, purchaseUrls, contents };
 }
+
 function buildBoosterRows(set: MTGSet) {
 	const sheets: AnyRow[] = [], sheetCards: AnyRow[] = [], contents: AnyRow[] = [], contentWeights: AnyRow[] = [];
 	for (const [boosterName, config] of Object.entries(set.booster ?? {})) {
@@ -179,6 +160,7 @@ function buildBoosterRows(set: MTGSet) {
 	}
 	return { sheets, sheetCards, contents, contentWeights };
 }
+
 function buildDeckRows(setCode: string, decks: DeckSet[]) {
 	const deckRows: AnyRow[] = [], deckCardRows: AnyRow[] = [];
 	for (const deck of decks) {
@@ -189,14 +171,15 @@ function buildDeckRows(setCode: string, decks: DeckSet[]) {
 	}
 	return { deckRows, deckCardRows };
 }
-function buildCardRows(cards: CardSet[]) {
+
+function buildCardRows(cards: CardSet[], setName: string) {
 	const cardRows: AnyRow[] = [], identifierRows: AnyRow[] = [], legalityRows: AnyRow[] = [],
 	      foreignDataRows: AnyRow[] = [], rulingRows: AnyRow[] = [], purchaseUrlRows: AnyRow[] = [];
 	for (const card of cards) {
 		const ls = card.leadershipSkills as LeadershipSkills | undefined;
 		const c  = card as CardSet & AnyRow;
 		cardRows.push({
-			uuid: card.uuid, set_code: card.setCode, artist: card.artist ?? null, artist_ids: card.artistIds ?? null,
+			uuid: card.uuid, set_code: card.setCode, set_name: card.setName ?? setName, artist: card.artist ?? null, artist_ids: card.artistIds ?? null,
 			ascii_name: card.asciiName ?? null, attraction_lights: card.attractionLights ?? null,
 			availability: card.availability, booster_types: card.boosterTypes ?? null, border_color: card.borderColor,
 			card_parts: card.cardParts ?? null, color_identity: card.colorIdentity, color_indicator: card.colorIndicator ?? null,
@@ -235,6 +218,7 @@ function buildCardRows(cards: CardSet[]) {
 	}
 	return { cardRows, identifierRows, legalityRows, foreignDataRows, rulingRows, purchaseUrlRows };
 }
+
 function buildTokenRows(tokens: CardToken[]) {
 	const tokenRows: AnyRow[] = [], identifierRows: AnyRow[] = [];
 	for (const token of tokens) {
@@ -265,6 +249,7 @@ function buildTokenRows(tokens: CardToken[]) {
 	}
 	return { tokenRows, identifierRows };
 }
+
 function collectJunctions(junctions: JunctionData, cards: CardSet[], tokens: CardToken[]): void {
 	for (const card of cards) {
 		const rc = card.relatedCards;
@@ -337,7 +322,7 @@ async function processSet(tx: any, set: MTGSet, junctions: JunctionData): Promis
 	await batchInsert(tx, "set_decks",      decks.deckRows);
 	await batchInsert(tx, "set_deck_cards", decks.deckCardRows);
 	if (set.cards.length > 0) {
-		const c = buildCardRows(set.cards);
+		const c = buildCardRows(set.cards, set.name);
 		await batchInsert(tx, "cards",             c.cardRows);
 		await batchInsert(tx, "card_identifiers",  c.identifierRows);
 		await batchInsert(tx, "card_legalities",   c.legalityRows);
@@ -360,11 +345,7 @@ async function processSet(tx: any, set: MTGSet, junctions: JunctionData): Promis
  * Drops and recreates all tables before inserting.
  * Use this for initial setup only — for incremental updates use {@link seedSingleSet}.
  */
-export async function seedDatabase(
-	connectionUrl: string,
-	allPrintingsPath: string,
-	options?: SeedOptions,
-): Promise<SeedResult> {
+export async function seedDatabase(	connectionUrl: string, allPrintingsPath: string, options?: SeedOptions, ): Promise<SeedResult> {
 	const schemaDir = options?.schemaDir ?? defaultSchemaDir();
 	const onProgress = options?.onProgress;
 
@@ -416,18 +397,10 @@ export async function seedDatabase(
  * Safe to call on sets that already exist — all inserts use ON CONFLICT DO NOTHING.
  * Junction table rows (relatedCards, sourceProducts) are committed after the set.
  */
-export async function seedSingleSet(
-	connectionUrl: string,
-	set: MTGSet,
-): Promise<{ cards: number; tokens: number }> {
+export async function seedSingleSet( connectionUrl: string,	set: MTGSet ): Promise<{ cards: number; tokens: number }> {
 	const db = postgres(connectionUrl);
 	try {
-		const junctions: JunctionData = {
-			cardRelatedCards:    [],
-			tokenRelatedCards:   [],
-			cardSourceProducts:  [],
-			tokenSourceProducts: [],
-		};
+		const junctions: JunctionData = { cardRelatedCards: [], tokenRelatedCards: [], cardSourceProducts: [], tokenSourceProducts: [] };
 
 		await db.begin(async (tx) => { await processSet(tx, set, junctions); });
 
@@ -436,12 +409,8 @@ export async function seedSingleSet(
 			{ table: "token_related_cards",   rows: junctions.tokenRelatedCards },
 			{ table: "card_source_products",  rows: junctions.cardSourceProducts },
 			{ table: "token_source_products", rows: junctions.tokenSourceProducts },
-		]) {
-			await batchInsert(db, table, rows);
-		}
+		]) { await batchInsert(db, table, rows); }
 
 		return { cards: set.cards.length, tokens: set.tokens.length };
-	} finally {
-		await db.end();
-	}
+	} finally {	await db.end(); }
 }

@@ -118,6 +118,7 @@ export type CardDeck = {
   rulings?: Rulings[];
   securityStamp?: string;
   setCode: string;
+  setName: string;
   side?: string;
   signature?: string;
   sourceProducts?: string[];
@@ -203,6 +204,7 @@ export type CardSet = {
   rulings?: Rulings[];
   securityStamp?: string;
   setCode: string;
+  setName: string;
   side?: string;
   signature?: string;
   sourceProducts?: SourceProducts;
