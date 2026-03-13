@@ -79,8 +79,10 @@ export class CardQuery {
 		}
 	}
 
-	/** Applies all search filter conditions to the given SQLBuilder. */
-	private _applyFilters(q: SQLBuilder, opts: SearchOptions): void {
+	/** Applies all search filter conditions to the given SQLBuilder.
+	 *  @param table  Base table/view name used for qualified column references (default: "v_cards").
+	 */
+	private _applyFilters(q: SQLBuilder, opts: SearchOptions, table = "v_cards"): void {
 		if (opts.name) {
 			if (opts.name.includes("%")) {
 				q.whereLike("name", opts.name);
@@ -173,8 +175,8 @@ export class CardQuery {
 		}
 
 		if (opts.localizedName) {
-			q.select("v_cards.*");
-			q.join("JOIN card_foreign_data cfd ON v_cards.uuid = cfd.uuid");
+			q.select(`${table}.*`);
+			q.join(`JOIN card_foreign_data cfd ON ${table}.uuid = cfd.uuid`);
 			if (opts.localizedName.includes("%")) {	q.whereLike("cfd.name", opts.localizedName); }
 			else { q.whereEq("cfd.name", opts.localizedName); }
 		}
@@ -188,8 +190,8 @@ export class CardQuery {
 		}
 
 		if (opts.setType) {
-			q.select("v_cards.*");
-			q.join("JOIN sets s ON v_cards.set_code = s.code");
+			q.select(`${table}.*`);
+			q.join(`JOIN sets s ON ${table}.set_code = s.code`);
 			q.whereEq("s.type", opts.setType);
 		}
 	}
@@ -248,12 +250,39 @@ export class CardQuery {
 		const limit = opts.limit ?? 100;
 		const offset = opts.offset ?? 0;
 
-		this._applyFilters(q, opts);
+		this._applyFilters(q, opts, "v_cards");
 		q.orderBy("v_cards.name ASC", "v_cards.number ASC");
 		q.limit(limit).offset(offset);
 
 		const [sql, params] = q.build();
 		return (await this._conn.execute(sql, params)).map(r => this._liftRow(r)) as CardSet[];
+	}
+
+	/**
+	 * Search the combined cards + tokens view (v_cards_combined).
+	 * Returns results from both tables in a single sorted list.
+	 * Token rows have NULL for card-only fields (manaValue, rarity, legalities, etc.).
+	 */
+	async searchCombined(options?: SearchOptions): Promise<CardSet[]> {
+		const q = new SQLBuilder("v_cards_combined");
+		const opts = options ?? {};
+		const limit = opts.limit ?? 100;
+		const offset = opts.offset ?? 0;
+
+		this._applyFilters(q, opts, "v_cards_combined");
+		q.orderBy("v_cards_combined.name ASC", "v_cards_combined.number ASC");
+		q.limit(limit).offset(offset);
+
+		const [sql, params] = q.build();
+		return (await this._conn.execute(sql, params)).map(r => this._liftRow(r)) as CardSet[];
+	}
+
+	/** Count rows in the combined cards + tokens view matching the given search options. */
+	async countCombined(options?: SearchOptions): Promise<number> {
+		const q = new SQLBuilder("v_cards_combined").select("COUNT(*)");
+		this._applyFilters(q, options ?? {}, "v_cards_combined");
+		const [sql, params] = q.build();
+		return ((await this._conn.executeScalar(sql, params)) as number) ?? 0;
 	}
 
 	async getPrintings(name: string): Promise<CardSet[]> { return this.getByName(name); }
