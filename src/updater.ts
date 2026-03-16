@@ -108,9 +108,8 @@ export async function applySetUpdates(
 	// Determine which sets to add or re-seed
 	let toAdd: SetListEntry[];
 	let toReseed: SetListEntry[] = [];
-	if (options?.sets) {
-		toAdd = options.sets.map((code) => ({ code, name: code, releaseDate: null, type: "unknown", totalSetSize: 0 }));
-	} else {
+	if (options?.sets) { toAdd = options.sets.map((code) => ({ code, name: code, releaseDate: null, type: "unknown", totalSetSize: 0 })); }
+  else {
 		const check = await checkForSetUpdates(connectionUrl, { timeout });
 		toAdd    = check.newSets;
 		toReseed = check.staleSets;
@@ -123,10 +122,7 @@ export async function applySetUpdates(
 	let totalCards  = 0;
 	let totalTokens = 0;
 
-	const allEntries = [
-		...toAdd.map((e) => ({ ...e, isUpdate: false })),
-		...toReseed.map((e) => ({ ...e, isUpdate: true })),
-	];
+	const allEntries = [ ...toAdd.map((e) => ({ ...e, isUpdate: false })), ...toReseed.map((e) => ({ ...e, isUpdate: true })) ];
 
 	for (let i = 0; i < allEntries.length; i++) {
 		const entry = allEntries[i];
@@ -134,12 +130,8 @@ export async function applySetUpdates(
 		// Fetch individual set file from CDN
 		const response = await fetchJson<{ meta: Record<string, string>; data: MTGSet }>(`${CDN_BASE}/${entry.code}.json`, timeout );
 		const setName = response.data.name ?? entry.name;
-		for (const card of response.data.cards) {
-			card.setName = card.setName ?? setName;
-		}
-		for (const token of response.data.tokens) {
-			token.setName = token.setName ?? setName;
-		}
+		for (const card of response.data.cards) { card.setName = card.setName ?? setName; }
+		for (const token of response.data.tokens) { token.setName = token.setName ?? setName; }
 
 		const { cards, tokens } = await seedSingleSet(connectionUrl, response.data);
 

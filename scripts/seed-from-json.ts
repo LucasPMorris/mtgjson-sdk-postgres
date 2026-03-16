@@ -654,7 +654,3 @@ main().catch((err) => {
 	console.error(err);
 	process.exit(1);
 });
-// ──────────────────────────────────────────────────────────────────────────────
-// Legacy implementations below — superseded by src/seeder.ts
-// These are kept for reference but are NOT called by main().
-// ──────────────────────────────────────────────────────────────────────────────
