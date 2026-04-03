@@ -148,9 +148,7 @@ export class CardQuery {
 			}
 		}
 
-		if (onlyConditions.length > 0) {
-			q._where.push(`(${onlyConditions.join(" OR ")})`);
-		}
+		if (onlyConditions.length > 0) { q._where.push(`(${onlyConditions.join(" OR ")})`);	}
 
 		for (const color of opts.colors ?? []) {
 			const idx = q._params.length + 1;

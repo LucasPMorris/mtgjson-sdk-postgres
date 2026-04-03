@@ -3,6 +3,7 @@
  * Exported so it can be called programmatically (e.g. from sdk.update()).
  */
 import { createReadStream, readFileSync } from "node:fs";
+import { get as httpsGet } from "node:https";
 import { fileURLToPath } from "node:url";
 import { join, dirname } from "node:path";
 import { chain } from "stream-chain";
@@ -11,7 +12,8 @@ import pick from "stream-json/filters/Pick.js";
 import streamObject from "stream-json/streamers/StreamObject.js";
 import streamValues from "stream-json/streamers/StreamValues.js";
 import postgres from "postgres";
-import type { CardSet, CardToken, DeckSet, Identifiers, LeadershipSkills, Legalities,	PurchaseUrls, SealedProduct, Set as MTGSet, SourceProducts } from "./types";
+import { CDN_BASE } from "./config.js";
+import type { CardSet, CardToken, CardTypes, DeckSet, Identifiers, Keywords, LeadershipSkills, Legalities, PurchaseUrls, SealedProduct, Set as MTGSet, SourceProducts } from "./types";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -359,6 +361,118 @@ async function processSet(tx: any, set: MTGSet, junctions: JunctionData): Promis
 	collectJunctions(junctions, set.cards, set.tokens);
 }
 
+// ── Catalog seeding ──────────────────────────────────────────────────────────
+
+/** Lightweight JSON fetcher (follows one redirect). */
+async function fetchJson<T>(url: string, timeout = 60_000): Promise<T> {
+	return new Promise((resolve, reject) => {
+		const req = httpsGet(url, { timeout }, (res) => {
+			if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+				fetchJson<T>(res.headers.location, timeout).then(resolve, reject);
+				return;
+			}
+			if (res.statusCode && res.statusCode >= 400) {
+				reject(new Error(`HTTP ${res.statusCode} fetching ${url}`));
+				res.resume();
+				return;
+			}
+			const chunks: Buffer[] = [];
+			res.on("data", (chunk: Buffer) => chunks.push(chunk));
+			res.on("end", () => {
+				try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf-8")) as T); }
+				catch (e) { reject(new Error(`JSON parse error for ${url}: ${e}`)); }
+			});
+			res.on("error", reject);
+		});
+		req.on("error", reject);
+		req.on("timeout", () => { req.destroy(); reject(new Error(`Timeout fetching ${url}`)); });
+	});
+}
+
+/** EnumValues keys to exclude (redundant with CardTypes hierarchy). */
+const EXCLUDED_ENUM_KEYS = new Set(["card.types", "card.supertypes", "card.subtypes"]);
+
+/** Flatten Keywords, CardTypes, and EnumValues JSON into catalog rows. */
+function buildCatalogRows(
+	keywords: { data: Keywords },
+	cardTypes: { data: CardTypes },
+	enumValues: { data: Record<string, Record<string, string[]>> },
+): AnyRow[] {
+	const seen = new Set<string>();
+	const rows: AnyRow[] = [];
+
+	const add = (category: string, name: string, values: string[]) => {
+		const key = `${category}\0${name}`;
+		if (seen.has(key)) return;
+		seen.add(key);
+		rows.push({ category, name, values });
+	};
+
+	// Keywords → category "keywords", name = key
+	for (const [name, values] of Object.entries(keywords.data)) {
+		add("keywords", name, values);
+	}
+
+	// CardTypes → category "cardTypes", name = "typeName.subTypes" / "typeName.superTypes"
+	for (const [typeName, typeData] of Object.entries(cardTypes.data)) {
+		add("cardTypes", `${typeName}.subTypes`, typeData.subTypes ?? []);
+		add("cardTypes", `${typeName}.superTypes`, typeData.superTypes ?? []);
+	}
+
+	// EnumValues → category = top-level key, name = nested key (skip excluded)
+	for (const [category, nested] of Object.entries(enumValues.data)) {
+		for (const [name, values] of Object.entries(nested)) {
+			if (EXCLUDED_ENUM_KEYS.has(`${category}.${name}`)) continue;
+			add(category, name, Array.isArray(values) ? values : []);
+		}
+	}
+
+	return rows;
+}
+
+/**
+ * Download Keywords, CardTypes, and EnumValues from MTGJSON CDN and upsert
+ * into the catalogs table.
+ */
+// biome-ignore lint/suspicious/noExplicitAny: postgres.js transaction type
+export async function seedCatalogs(db: any, options?: { timeout?: number }): Promise<number> {
+	const timeout = options?.timeout ?? 60_000;
+
+	const [keywords, cardTypes, enumValues] = await Promise.all([
+		fetchJson<{ data: Keywords }>(`${CDN_BASE}/Keywords.json`, timeout),
+		fetchJson<{ data: CardTypes }>(`${CDN_BASE}/CardTypes.json`, timeout),
+		fetchJson<{ data: Record<string, Record<string, string[]>> }>(`${CDN_BASE}/EnumValues.json`, timeout),
+	]);
+
+	const rows = buildCatalogRows(keywords, cardTypes, enumValues);
+
+	for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+		const batch = rows.slice(i, i + BATCH_SIZE);
+		await db`
+			INSERT INTO catalogs ${db(batch)}
+			ON CONFLICT (category, name) DO UPDATE SET
+				values = EXCLUDED.values
+		`;
+	}
+
+	// Derive legality formats from the card_legalities table columns
+	const formatRows = await db`
+		SELECT column_name FROM information_schema.columns
+		WHERE table_name = 'card_legalities' AND column_name != 'uuid'
+		ORDER BY column_name
+	`;
+	if (formatRows.length > 0) {
+		const formats = formatRows.map((r: AnyRow) => r.column_name as string);
+		await db`
+			INSERT INTO catalogs ${db([{ category: "legalities", name: "formats", values: formats }])}
+			ON CONFLICT (category, name) DO UPDATE SET values = EXCLUDED.values
+		`;
+		rows.push({ category: "legalities", name: "formats", values: formats });
+	}
+
+	return rows.length;
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
@@ -403,6 +517,9 @@ export async function seedDatabase(	connectionUrl: string, allPrintingsPath: str
 		]) {
 			await batchInsert(db, table, rows);
 		}
+
+		// Catalogs (keywords, card types, enum values)
+		await seedCatalogs(db);
 
 		// Relations / indexes
 		await db.unsafe(relationsSql);

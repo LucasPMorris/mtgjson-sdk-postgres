@@ -6,7 +6,7 @@
 import { get as httpsGet } from "node:https";
 import postgres from "postgres";
 import { CDN_BASE } from "./config.js";
-import { seedSingleSet } from "./seeder.js";
+import { seedCatalogs, seedSingleSet } from "./seeder.js";
 import type { Set as MTGSet } from "./types/index.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -218,6 +218,11 @@ export async function applySetUpdates(
 	}
 
 	if (toAdd.length === 0 && toReseed.length === 0) return { addedSets: [], updatedSets: [], totalCards: 0, totalTokens: 0 };
+
+	// Refresh catalogs (keywords, card types, enum values)
+	const db = (await import("postgres")).default(connectionUrl);
+	try { await seedCatalogs(db, { timeout }); }
+	finally { await db.end(); }
 
 	const addedSets:   string[] = [];
 	const updatedSets: string[] = [];

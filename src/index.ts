@@ -1,7 +1,7 @@
 export { MtgjsonSDK } from "./client.js";
 export type { MtgjsonSDKOptions } from "./client.js";
 
-export { seedDatabase, seedSingleSet } from "./seeder.js";
+export { seedDatabase, seedSingleSet, seedCatalogs } from "./seeder.js";
 export type { SeedResult, SeedOptions, SeedProgress } from "./seeder.js";
 export { checkForSetUpdates, applySetUpdates } from "./updater.js";
 export type { SetListEntry, UpdateCheckResult, UpdateResult, UpdateProgress } from "./updater.js";

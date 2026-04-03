@@ -1,22 +1,23 @@
 import type { Connection } from "../connection.js";
 import type { CardSet } from "../types/index.js";
 
-/**
- * Valid format column names in the card_legalities wide table.
- * Values: 'Legal' | 'Banned' | 'Restricted' | 'Not Legal' | null
- */
-const KNOWN_FORMATS = new Set([
-	"alchemy", "brawl", "commander", "duel", "explorer", "future",
-	"gladiator", "historic", "historicbrawl", "legacy", "modern",
-	"oathbreaker", "oldschool", "pauper", "paupercommander", "penny",
-	"pioneer", "predh", "premodern", "standard", "standardbrawl",
-	"timeless", "vintage",
-]);
-
 export class LegalityQuery {
 	private _conn: Connection;
+	private _knownFormats: Set<string> | null = null;
 
 	constructor(conn: Connection) { this._conn = conn; }
+
+	/** Load known format names from the catalogs table, cached after first call. */
+	async getKnownFormats(): Promise<Set<string>> {
+		if (this._knownFormats) return this._knownFormats;
+		const rows = await this._conn.execute(
+			"SELECT values FROM catalogs WHERE category = $1 AND name = $2",
+			["legalities", "formats"],
+		);
+		const formats = (rows[0]?.values as string[]) ?? [];
+		this._knownFormats = new Set(formats);
+		return this._knownFormats;
+	}
 
 	/**
 	 * Returns all format→status pairs for a card.
@@ -35,8 +36,10 @@ export class LegalityQuery {
 		return result;
 	}
 
-	async legalIn(formatName: string, options?: { limit?: number; offset?: number }	): Promise<CardSet[]> { const fmt = formatName.toLowerCase();
-    if (!KNOWN_FORMATS.has(fmt)) return [];
+	async legalIn(formatName: string, options?: { limit?: number; offset?: number }	): Promise<CardSet[]> {
+		const fmt = formatName.toLowerCase();
+		const known = await this.getKnownFormats();
+		if (!known.has(fmt)) return [];
 		const limit = options?.limit ?? 100;
 		const offset = options?.offset ?? 0;
 		const sql = `SELECT DISTINCT c.* FROM cards c
@@ -49,7 +52,8 @@ export class LegalityQuery {
 
 	async isLegal(uuid: string, formatName: string): Promise<boolean> {
 		const fmt = formatName.toLowerCase();
-		if (!KNOWN_FORMATS.has(fmt)) return false;
+		const known = await this.getKnownFormats();
+		if (!known.has(fmt)) return false;
 		const result = await this._conn.executeScalar( `SELECT COUNT(*) FROM card_legalities WHERE uuid = $1 AND ${fmt} = 'Legal'`,	[uuid] );
 		return ((result as number) ?? 0) > 0;
 	}
@@ -61,7 +65,8 @@ export class LegalityQuery {
 
 	private async _cardsByStatus(	formatName: string, status: string, options?: { limit?: number; offset?: number }	): Promise<Record<string, unknown>[]> {
 		const fmt = formatName.toLowerCase();
-		if (!KNOWN_FORMATS.has(fmt)) return [];
+		const known = await this.getKnownFormats();
+		if (!known.has(fmt)) return [];
 		const limit = options?.limit ?? 100;
 		const offset = options?.offset ?? 0;
 		return this._conn.execute(

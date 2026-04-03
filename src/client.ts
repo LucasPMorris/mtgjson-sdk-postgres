@@ -2,6 +2,7 @@ import { BoosterSimulator } from "./booster/simulator.js";
 import { CacheManager, type ProgressCallback } from "./cache.js";
 import { Connection } from "./connection.js";
 import { CardQuery, DeckQuery, EnumQuery, IdentifierQuery, LegalityQuery, PriceQuery, SealedQuery, SetQuery, SkuQuery, TokenQuery } from "./queries/index.js";
+import { seedCatalogs } from "./seeder.js";
 import { checkForSetUpdates, applySetUpdates, type UpdateCheckResult, type UpdateResult, type UpdateProgress } from "./updater.js";
 
 /** PostgreSQL connection URL. Falls back to DATABASE_URL env var. */
@@ -81,7 +82,7 @@ export class MtgjsonSDK {
 	}
 
 	get enums(): EnumQuery {
-		if (!this._enums) this._enums = new EnumQuery(this._cache);
+		if (!this._enums) this._enums = new EnumQuery(this._conn);
 		return this._enums;
 	}
 
@@ -112,6 +113,13 @@ export class MtgjsonSDK {
 	 * @param options.onProgress  Called after each set is seeded.
 	 */
 	async update(options?: { sets?: string[];	timeout?: number;	onProgress?: (progress: UpdateProgress) => void; }): Promise<UpdateResult> { return applySetUpdates(this._connectionUrl, options); }
+
+	/** Re-download Keywords, CardTypes, and EnumValues from MTGJSON and upsert into the catalogs table. */
+	async refreshCatalogs(options?: { timeout?: number }): Promise<number> {
+		const pg = (await import("postgres")).default(this._connectionUrl);
+		try { return await seedCatalogs(pg, options); }
+		finally { await pg.end(); }
+	}
 
 	async close(): Promise<void> {
   	await this._conn.close();
