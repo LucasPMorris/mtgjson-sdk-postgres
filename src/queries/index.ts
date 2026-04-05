@@ -1,4 +1,5 @@
 export { CardQuery, CardPaginator } from "./cards.js";
+export type { SortField, SortDirection, SortOption } from "./cards.js";
 export { SetQuery } from "./sets.js";
 export { TokenQuery } from "./tokens.js";
 export { PriceQuery } from "./prices.js";

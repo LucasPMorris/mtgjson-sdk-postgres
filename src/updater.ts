@@ -9,50 +9,18 @@ import { CDN_BASE } from "./config.js";
 import { seedCatalogs, seedSingleSet } from "./seeder.js";
 import type { Set as MTGSet } from "./types/index.js";
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-
 /** Minimal shape of a SetList.json entry — only what we need for comparison. */
 export interface SetListEntry { code: string; name: string; releaseDate: string | null; type: string; tokenSetCode?: string; totalSetSize: number; }
 
 /** Per-set status combining MTGJSON and database state. */
-export interface SetUpdateStatus {
-	code: string;
-	tokenSetCode?: string;
-	existsInSets: boolean;
-	hasCards: boolean;
-	existsInTokens: boolean;
-	publishedTokenCount?: number;
-	databaseTokenCount?: number;
-	needsUpdate: boolean;
-	/** Human-readable reason why this set needs an update, or 'up-to-date'. */
-	reason: string;
-}
+export interface SetUpdateStatus { code: string; tokenSetCode?: string; existsInSets: boolean; hasCards: boolean; existsInTokens: boolean;
+                                   publishedTokenCount?: number;	databaseTokenCount?: number; needsUpdate: boolean;	reason: string; }
 
-export interface UpdateCheckSummary {
-	/** MTGJSON sets not found in the sets table at all. */
-	missingFromSetsTable: number;
-	/** Sets in sets table with no rows in the cards table. */
-	missingCards: number;
-	/** Sets whose tokenSetCode has no rows in the tokens table. */
-	missingTokenData: number;
-	/** Sets whose published token count exceeds the database token count. */
-	TokenCountMismatch: number;
-	/** Sets that are up-to-date. */
-	upToDate: number;
-}
+export interface UpdateCheckSummary { missingFromSetsTable: number; missingCards: number;	missingTokenData: number; TokenCountMismatch: number;	upToDate: number; }
 
-export interface UpdateCheckResult {
-	newSets: SetListEntry[];
-	staleSets: SetListEntry[];
-	mtgjsonVersion: string;
-	mtgjsonDate: string;
-	setStatuses: SetUpdateStatus[];
-	summary: UpdateCheckSummary;
-}
-
+export interface UpdateCheckResult { newSets: SetListEntry[]; staleSets: SetListEntry[]; mtgjsonVersion: string; mtgjsonDate: string; setStatuses: SetUpdateStatus[];	summary: UpdateCheckSummary; }
 export interface UpdateProgress { setCode: string; setName: string; done: number; total: number; cards: number; tokens: number; }
-/** Sets that already existed but had new cards seeded into them (preview/spoiler growth). */
-export interface UpdateResult { addedSets: string[]; updatedSets: string[]; totalCards: number; totalTokens: number; }
+export interface UpdateResult { addedSets: string[]; updatedSets: string[]; totalCards: number; totalTokens: number; } /** Sets that already existed but had new cards seeded into them (preview/spoiler growth). */
 
 // ── HTTP helper ───────────────────────────────────────────────────────────────
 

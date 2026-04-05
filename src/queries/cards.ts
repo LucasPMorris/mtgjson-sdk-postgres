@@ -7,6 +7,19 @@ const KNOWN_FORMATS = new Set([ "alchemy",   "brawl",   "commander",       "duel
 
 type KeywordOperator = "All" | "Any" | "Exact";
 
+export type SortField = "name" | "manaValue" | "power" | "toughness" | "number" | "set";
+export type SortDirection = "ASC" | "DESC";
+export type SortOption = SortField | `${SortField}:${SortDirection}`;
+
+const SORT_FIELD_MAP: Record<SortField, { column: string; numeric?: boolean }> = {
+	name:      { column: "name" },
+	manaValue: { column: "mana_value" },
+	power:     { column: "power", numeric: true },
+	toughness: { column: "toughness", numeric: true },
+	number:    { column: "number" },
+	set:       { column: "set_code" },
+};
+
 type SearchOptions = {
 	name?: string;
 	localizedName?: string;
@@ -15,7 +28,7 @@ type SearchOptions = {
 	colorIdentity?: string[];
 	types?: string;
 	subtype?: string;
-	rarity?: string;
+	rarity?: string | string[];
 	legalIn?: string;
 	manaValue?: number;
 	manaValueLte?: number;
@@ -47,6 +60,7 @@ type SearchOptions = {
 	language?: string;
 	layout?: string;
 	setType?: string;
+	sort?: SortOption | SortOption[];
 	limit?: number;
 	offset?: number;
 };
@@ -55,6 +69,29 @@ export class CardQuery {
 	private _conn: Connection;
 
 	constructor(conn: Connection) {	this._conn = conn; }
+
+	/** Parse sort options and apply ORDER BY clauses to the query builder. */
+	private _applySort(q: SQLBuilder, sort: SortOption | SortOption[] | undefined, table: string): void {
+		if (!sort) {
+			q.orderBy(`${table}.name ASC`, `${table}.number ASC`);
+			return;
+		}
+		const sorts = Array.isArray(sort) ? sort : [sort];
+		for (const s of sorts) {
+			const [field, dir = "ASC"] = s.split(":") as [SortField, SortDirection?];
+			const mapping = SORT_FIELD_MAP[field];
+			if (!mapping) continue;
+			const col = `${table}.${mapping.column}`;
+			const direction = dir === "DESC" ? "DESC" : "ASC";
+			if (mapping.numeric) {
+				// Cast to numeric for proper ordering, push NULLs/non-numeric to the end
+				const nulls = direction === "ASC" ? "LAST" : "FIRST";
+				q.orderBy(`(CASE WHEN ${col} ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ${col}::NUMERIC END) ${direction} NULLS ${nulls}`);
+			} else {
+				q.orderBy(`${col} ${direction}`);
+			}
+		}
+	}
 
 	private _applyKeywordFilter(q: SQLBuilder, keywords: string[], op: KeywordOperator): void {
 		if (keywords.length === 0) return;
@@ -91,7 +128,7 @@ export class CardQuery {
 			}
 		}
 		if (opts.setCode) q.whereEq("set_code", opts.setCode);
-		if (opts.rarity) q.whereEq("rarity", opts.rarity);
+		if (opts.rarity) Array.isArray(opts.rarity) ? q.whereIn("rarity", opts.rarity) : q.whereEq("rarity", opts.rarity);
 		if (opts.manaValue !== undefined) q.whereEq("mana_value", opts.manaValue);
 		if (opts.manaValueLte !== undefined) q.whereLte("mana_value", opts.manaValueLte);
 		if (opts.manaValueGte !== undefined) q.whereGte("mana_value", opts.manaValueGte);
@@ -249,7 +286,7 @@ export class CardQuery {
 		const offset = opts.offset ?? 0;
 
 		this._applyFilters(q, opts, "v_cards");
-		q.orderBy("v_cards.name ASC", "v_cards.number ASC");
+		this._applySort(q, opts.sort, "v_cards");
 		q.limit(limit).offset(offset);
 
 		const [sql, params] = q.build();
@@ -268,7 +305,7 @@ export class CardQuery {
 		const offset = opts.offset ?? 0;
 
 		this._applyFilters(q, opts, "v_cards_combined");
-		q.orderBy("v_cards_combined.name ASC", "v_cards_combined.number ASC");
+		this._applySort(q, opts.sort, "v_cards_combined");
 		q.limit(limit).offset(offset);
 
 		const [sql, params] = q.build();

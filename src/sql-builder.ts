@@ -17,27 +17,16 @@ export class SQLBuilder {
 
 	constructor(baseTable: string) { this._from = baseTable;}
 
-	select(...columns: string[]): this {
-		this._select = columns;
-		return this;
-	}
+	select(...columns: string[]): this { this._select = columns; return this; }
 
-	distinct(): this {
-		this._distinct = true;
-		return this;
-	}
+  distinct(): this { this._distinct = true;	return this; }
 
-	join(clause: string): this {
-		this._joins.push(clause);
-		return this;
-	}
+  join(clause: string): this { this._joins.push(clause); return this; }
 
 	where(condition: string, ...params: unknown[]): this {
 		const offset = this._params.length;
 		let remapped = condition;
-		for (let i = params.length; i >= 1; i--) {
-			remapped = remapped.replaceAll(`$${i}`, `$${offset + i}`);
-		}
+		for (let i = params.length; i >= 1; i--) { remapped = remapped.replaceAll(`$${i}`, `$${offset + i}`); }
 		this._where.push(remapped);
 		this._params.push(...params);
 		return this;

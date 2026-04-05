@@ -602,16 +602,8 @@ async function readMeta(jsonPath: string): Promise<{ date: string; version: stri
 
 /** Stream the "data" object, yielding one fully-assembled set object at a time.
  *  Memory footprint: one set in memory at a time (plus junction buffers). */
-async function streamSets(
-	jsonPath: string,
-	onSet: (setCode: string, set: MTGSet) => Promise<void>,
-): Promise<number> {
-	const pipeline = chain([
-		createReadStream(jsonPath),
-		parser(),
-		new pick({ filter: "data" }),
-		new streamObject(),
-	]);
+async function streamSets( jsonPath: string,	onSet: (setCode: string, set: MTGSet) => Promise<void> ): Promise<number> {
+	const pipeline = chain([ createReadStream(jsonPath), parser(), new pick({ filter: "data" }), new streamObject() ]);
 
 	let count = 0;
 	for await (const { key, value } of pipeline as AsyncIterable<{ key: string; value: MTGSet }>) {
