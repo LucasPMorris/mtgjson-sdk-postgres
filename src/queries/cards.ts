@@ -279,6 +279,38 @@ export class CardQuery {
 		return (await this._conn.execute(sql, params)).map(r => this._liftRow(r)) as CardSet[];
 	}
 
+	/**
+	 * Fetch other faces for cards that have otherFaceIds, and append them
+	 * after their corresponding side 'a' card in the results list.
+	 */
+	private async _appendOtherFaces(rows: CardSet[], view: string): Promise<CardSet[]> {
+		const allFaceIds: string[] = [];
+		for (const r of rows) {
+			const ids = (r as Record<string, unknown>).otherFaceIds as string[] | null;
+			if (ids?.length) allFaceIds.push(...ids);
+		}
+		if (allFaceIds.length === 0) return rows;
+
+		const q = new SQLBuilder(view).whereIn("uuid", allFaceIds);
+		const [sql, params] = q.build();
+		const faceRows = (await this._conn.execute(sql, params)).map(r => this._liftRow(r)) as CardSet[];
+		const faceMap = new Map<string, CardSet>();
+		for (const f of faceRows) faceMap.set((f as Record<string, unknown>).uuid as string, f);
+
+		const result: CardSet[] = [];
+		for (const r of rows) {
+			result.push(r);
+			const ids = (r as Record<string, unknown>).otherFaceIds as string[] | null;
+			if (ids?.length) {
+				for (const id of ids) {
+					const face = faceMap.get(id);
+					if (face) result.push(face);
+				}
+			}
+		}
+		return result;
+	}
+
 	async search(options?: SearchOptions): Promise<CardSet[]> {
 		const q = new SQLBuilder("v_cards");
 		const opts = options ?? {};
@@ -286,11 +318,13 @@ export class CardQuery {
 		const offset = opts.offset ?? 0;
 
 		this._applyFilters(q, opts, "v_cards");
+		q._where.push("(side = 'a' OR side IS NULL)");
 		this._applySort(q, opts.sort, "v_cards");
 		q.limit(limit).offset(offset);
 
 		const [sql, params] = q.build();
-		return (await this._conn.execute(sql, params)).map(r => this._liftRow(r)) as CardSet[];
+		const rows = (await this._conn.execute(sql, params)).map(r => this._liftRow(r)) as CardSet[];
+		return this._appendOtherFaces(rows, "v_cards");
 	}
 
 	/**
@@ -305,17 +339,20 @@ export class CardQuery {
 		const offset = opts.offset ?? 0;
 
 		this._applyFilters(q, opts, "v_cards_combined");
+		q._where.push("(side = 'a' OR side IS NULL)");
 		this._applySort(q, opts.sort, "v_cards_combined");
 		q.limit(limit).offset(offset);
 
 		const [sql, params] = q.build();
-		return (await this._conn.execute(sql, params)).map(r => this._liftRow(r)) as CardSet[];
+		const rows = (await this._conn.execute(sql, params)).map(r => this._liftRow(r)) as CardSet[];
+		return this._appendOtherFaces(rows, "v_cards_combined");
 	}
 
 	/** Count rows in the combined cards + tokens view matching the given search options. */
 	async countCombined(options?: SearchOptions): Promise<number> {
 		const q = new SQLBuilder("v_cards_combined").select("COUNT(*)");
 		this._applyFilters(q, options ?? {}, "v_cards_combined");
+		q._where.push("(side = 'a' OR side IS NULL)");
 		const [sql, params] = q.build();
 		return ((await this._conn.executeScalar(sql, params)) as number) ?? 0;
 	}
@@ -371,6 +408,7 @@ export class CardQuery {
 	async count(options?: SearchOptions): Promise<number> {
 		const q = new SQLBuilder("v_cards").select("COUNT(*)");
 		this._applyFilters(q, options ?? {});
+		q._where.push("(side = 'a' OR side IS NULL)");
 		const [sql, params] = q.build();
 		return ((await this._conn.executeScalar(sql, params)) as number) ?? 0;
 	}
