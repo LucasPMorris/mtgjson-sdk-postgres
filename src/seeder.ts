@@ -455,6 +455,19 @@ export async function seedCatalogs(db: any, options?: { timeout?: number }): Pro
 		`;
 	}
 
+	// Derive distinct artists from the cards table
+	const artistRows = await db`
+		SELECT DISTINCT artist FROM cards WHERE artist IS NOT NULL ORDER BY artist
+	`;
+	if (artistRows.length > 0) {
+		const artists = artistRows.map((r: AnyRow) => r.artist as string);
+		await db`
+			INSERT INTO catalogs ${db([{ category: "artists", name: "all", values: artists }])}
+			ON CONFLICT (category, name) DO UPDATE SET values = EXCLUDED.values
+		`;
+		rows.push({ category: "artists", name: "all", values: artists });
+	}
+
 	// Derive legality formats from the card_legalities table columns
 	const formatRows = await db`
 		SELECT column_name FROM information_schema.columns

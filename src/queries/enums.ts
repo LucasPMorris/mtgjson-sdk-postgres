@@ -24,6 +24,11 @@ export class EnumQuery {
 		return result as unknown as CardTypes;
 	}
 
+	async artists(): Promise<string[]> {
+		const rows = await this._conn.execute("SELECT values FROM catalogs WHERE category = $1 AND name = $2", ["artists", "all"]);
+		return rows.length > 0 ? (rows[0].values as string[]) : [];
+	}
+
 	async enumValues(): Promise<Record<string, unknown>> {
 		const rows = await this._conn.execute("SELECT category, name, values FROM catalogs");
 		const result: Record<string, Record<string, string[]>> = {};

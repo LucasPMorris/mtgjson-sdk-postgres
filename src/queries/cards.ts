@@ -21,48 +21,49 @@ const SORT_FIELD_MAP: Record<SortField, { column: string; numeric?: boolean }> =
 };
 
 type SearchOptions = {
-	name?: string;
-	localizedName?: string;
-	setCode?: string;
+	artist?: string[];
+	availability?: string;  
 	colors?: string[];
 	colorIdentity?: string[];
-	types?: string;
-	subtype?: string;
-	rarity?: string | string[];
-	legalIn?: string;
-	manaValue?: number;
-	manaValueLte?: number;
-	manaValueGte?: number;
-	manaValueLt?: number;
-	manaValueGt?: number;
-	text?: string;
-	textRegex?: string;
-	power?: string;
-	powerGte?: number;
-	powerLte?: number;
-	powerGt?: number;
-	powerLt?: number;
-	toughness?: string;
-	toughnessGte?: number;
-	toughnessLte?: number;
-	toughnessGt?: number;
-	toughnessLt?: number;
-	artist?: string;
-	keywordAbilities?: string[];
-	keywordActions?: string[];
-	keywordOperator?: KeywordOperator;
 	isPromo?: boolean | 'only';
 	isOversized?: boolean | 'only';
 	isOnlineOnly?: boolean | 'only';
 	isToken?: boolean | 'only';
 	isArtSeries?: boolean | 'only';
-	availability?: string;
+  keywordAbilities?: string[];
+	keywordActions?: string[];
+	keywordOperator?: KeywordOperator;
 	language?: string;
 	layout?: string;
-	setType?: string;
-	sort?: SortOption | SortOption[];
+  legalIn?: string | string[];
 	limit?: number;
+	localizedName?: string;
+  manaValue?: number;
+	manaValueLte?: number;
+	manaValueGte?: number;
+	manaValueLt?: number;
+	manaValueGt?: number;
+ 	name?: string;
 	offset?: number;
+  power?: string;
+	powerGte?: number;
+	powerLte?: number;
+	powerGt?: number;
+	powerLt?: number;
+  rarity?: string | string[];
+  setCode?: string | string[];
+	setType?: string;
+	sort?: SortOption | SortOption[];  
+  subtype?: string | string[];
+	supertype?: string | string[];
+	text?: string;
+	textRegex?: string;
+ 	toughness?: string;
+	toughnessGte?: number;
+	toughnessLte?: number;
+	toughnessGt?: number;
+	toughnessLt?: number;
+ 	types?: string | string[];
 };
 
 export class CardQuery {
@@ -72,10 +73,8 @@ export class CardQuery {
 
 	/** Parse sort options and apply ORDER BY clauses to the query builder. */
 	private _applySort(q: SQLBuilder, sort: SortOption | SortOption[] | undefined, table: string): void {
-		if (!sort) {
-			q.orderBy(`${table}.name ASC`, `${table}.number ASC`);
-			return;
-		}
+		if (!sort) { q.orderBy(`${table}.name ASC`, `${table}.number ASC`); return;	}
+
 		const sorts = Array.isArray(sort) ? sort : [sort];
 		for (const s of sorts) {
 			const [field, dir = "ASC"] = s.split(":") as [SortField, SortDirection?];
@@ -84,12 +83,9 @@ export class CardQuery {
 			const col = `${table}.${mapping.column}`;
 			const direction = dir === "DESC" ? "DESC" : "ASC";
 			if (mapping.numeric) {
-				// Cast to numeric for proper ordering, push NULLs/non-numeric to the end
-				const nulls = direction === "ASC" ? "LAST" : "FIRST";
+				const nulls = direction === "ASC" ? "LAST" : "FIRST"; // Cast to numeric for proper ordering, push NULLs/non-numeric to the end
 				q.orderBy(`(CASE WHEN ${col} ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ${col}::NUMERIC END) ${direction} NULLS ${nulls}`);
-			} else {
-				q.orderBy(`${col} ${direction}`);
-			}
+			} else { q.orderBy(`${col} ${direction}`); }
 		}
 	}
 
@@ -121,13 +117,11 @@ export class CardQuery {
 	 */
 	private _applyFilters(q: SQLBuilder, opts: SearchOptions, table = "v_cards"): void {
 		if (opts.name) {
-			if (opts.name.includes("%")) {
-				q.whereLike("name", opts.name);
-			} else {
-				q.whereEq("name", opts.name);
-			}
+			if (opts.name.includes("%")) {q.whereLike("name", opts.name); }
+      else { q.whereEq("name", opts.name); }
 		}
-		if (opts.setCode) q.whereEq("set_code", opts.setCode);
+
+		if (opts.setCode) Array.isArray(opts.setCode) ? q.whereIn("set_code", opts.setCode) : q.whereEq("set_code", opts.setCode);
 		if (opts.rarity) Array.isArray(opts.rarity) ? q.whereIn("rarity", opts.rarity) : q.whereEq("rarity", opts.rarity);
 		if (opts.manaValue !== undefined) q.whereEq("mana_value", opts.manaValue);
 		if (opts.manaValueLte !== undefined) q.whereLte("mana_value", opts.manaValueLte);
@@ -136,11 +130,23 @@ export class CardQuery {
 		if (opts.manaValueGt  !== undefined) q.where("mana_value > $1", opts.manaValueGt);
 		if (opts.text) q.whereLike("text", `%${opts.text}%`);
 		if (opts.textRegex) q.whereRegex("text", opts.textRegex);
-		if (opts.types) q.whereLike("type", `%${opts.types}%`);
+		if (opts.types) {
+			const types = Array.isArray(opts.types) ? opts.types : [opts.types];
+			const parts = types.map(t => { const idx = q._params.length + 1; q._params.push(`%${t}%`); return `type ILIKE $${idx}`; });
+			if (parts.length === 1) q._where.push(parts[0]);
+			else q._where.push(`(${parts.join(" OR ")})`);
+		}
 		if (opts.subtype) {
-			const idx = q._params.length + 1;
-			q._where.push(`$${idx} = ANY(subtypes)`);
-			q._params.push(opts.subtype);
+			const subtypes = Array.isArray(opts.subtype) ? opts.subtype : [opts.subtype];
+			const parts = subtypes.map(s => { const idx = q._params.length + 1; q._params.push(s); return `$${idx} = ANY(subtypes)`; });
+			if (parts.length === 1) q._where.push(parts[0]);
+			else q._where.push(`(${parts.join(" OR ")})`);
+		}
+		if (opts.supertype) {
+			const supertypes = Array.isArray(opts.supertype) ? opts.supertype : [opts.supertype];
+			const parts = supertypes.map(s => { const idx = q._params.length + 1; q._params.push(s); return `$${idx} = ANY(supertypes)`; });
+			if (parts.length === 1) q._where.push(parts[0]);
+			else q._where.push(`(${parts.join(" OR ")})`);
 		}
 		if (opts.power) q.whereEq("power", opts.power);
 		if (opts.powerGte !== undefined) q.where(`power ~ '^-?[0-9]+(\\.[0-9]+)?$' AND power::NUMERIC >= $1`, opts.powerGte);
@@ -152,7 +158,7 @@ export class CardQuery {
 		if (opts.toughnessLte !== undefined) q.where(`toughness ~ '^-?[0-9]+(\\.[0-9]+)?$' AND toughness::NUMERIC <= $1`, opts.toughnessLte);
 		if (opts.toughnessGt  !== undefined) q.where(`toughness ~ '^-?[0-9]+(\\.[0-9]+)?$' AND toughness::NUMERIC > $1`,  opts.toughnessGt);
 		if (opts.toughnessLt  !== undefined) q.where(`toughness ~ '^-?[0-9]+(\\.[0-9]+)?$' AND toughness::NUMERIC < $1`,  opts.toughnessLt);
-		if (opts.artist) q.whereLike("artist", `%${opts.artist}%`);
+		if (opts.artist?.length) q.whereIn("artist", opts.artist);
 		if (opts.language) q.whereEq("language", opts.language);
 		if (opts.layout) q.whereEq("layout", opts.layout);
 		// Boolean include filters:
@@ -217,11 +223,9 @@ export class CardQuery {
 		}
 
 		if (opts.legalIn) {
-			const fmt = opts.legalIn.toLowerCase();
-			if (KNOWN_FORMATS.has(fmt)) {
-				// v_cards already has legalities as JSONB — no join needed.
-				q._where.push(`legalities->>'${fmt}' = 'Legal'`);
-			}
+			const formats = (Array.isArray(opts.legalIn) ? opts.legalIn : [opts.legalIn]).map(f => f.toLowerCase()).filter(f => KNOWN_FORMATS.has(f));
+			if (formats.length === 1) { q._where.push(`legalities->>'${formats[0]}' = 'Legal'`); }
+			else if (formats.length > 1) { q._where.push(`(${formats.map(f => `legalities->>'${f}' = 'Legal'`).join(" OR ")})`); }
 		}
 
 		if (opts.setType) {
@@ -370,11 +374,7 @@ export class CardQuery {
 		if (rows.length === 0) {
 			const q2 = new SQLBuilder("v_cards");
 			q2.whereEq("face_name", name);
-			q2.orderBy(
-				"is_funny ASC NULLS FIRST",
-				"is_online_only ASC NULLS FIRST",
-				"side ASC NULLS FIRST",
-			);
+			q2.orderBy("is_funny ASC NULLS FIRST", "is_online_only ASC NULLS FIRST", "side ASC NULLS FIRST" );
 			const [sql2, params2] = q2.build();
 			rows = (await this._conn.execute(sql2, params2)).map(r => this._liftRow(r));
 		}
