@@ -6,7 +6,7 @@ export type { SeedResult, SeedOptions, SeedProgress } from "./seeder.js";
 export { checkForSetUpdates, applySetUpdates } from "./updater.js";
 export type { SetListEntry, UpdateCheckResult, UpdateResult, UpdateProgress } from "./updater.js";
 
-export { CardQuery, CardPaginator, SetQuery, TokenQuery,	PriceQuery,	LegalityQuery, IdentifierQuery, DeckQuery, SealedQuery, SkuQuery,	EnumQuery } from "./queries/index.js";
+export { CardQuery, CardPaginator, SetQuery, TokenQuery,	PriceQuery,	LegalityQuery, IdentifierQuery, DeckQuery, DeckPaginator, SealedQuery, SkuQuery,	EnumQuery } from "./queries/index.js";
 export { BoosterSimulator } from "./booster/simulator.js";
 export { SQLBuilder } from "./sql-builder.js";
 export { Connection } from "./connection.js";
@@ -47,7 +47,14 @@ export type {
 	CardAtomic,
 	CardSet,
 	CardDeck,
-	// Set models
+	// Deck models
+	DeckStats,
+	DeckCardEntry,
+	DeckCard,
+	DeckToken,
+	DeckBoards,
+	PreconDeck,
+	// Set models (deprecated deck types kept for backward compat)
 	DeckSet,
 	SetList,
 	SealedProduct,

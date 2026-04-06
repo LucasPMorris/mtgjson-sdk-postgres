@@ -13,7 +13,7 @@ import streamObject from "stream-json/streamers/StreamObject.js";
 import streamValues from "stream-json/streamers/StreamValues.js";
 import postgres from "postgres";
 import { CDN_BASE } from "./config.js";
-import type { CardSet, CardToken, CardTypes, DeckSet, Identifiers, Keywords, LeadershipSkills, Legalities, PurchaseUrls, SealedProduct, Set as MTGSet, SourceProducts } from "./types";
+import type { CardSet, CardToken, CardTypes, DeckSet, DeckStats, Identifiers, Keywords, LeadershipSkills, Legalities, PurchaseUrls, SealedProduct, Set as MTGSet, SourceProducts } from "./types";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -163,13 +163,90 @@ function buildBoosterRows(set: MTGSet) {
 	return { sheets, sheetCards, contents, contentWeights };
 }
 
-function buildDeckRows(setCode: string, decks: DeckSet[]) {
+function computeDeckStats(deck: DeckSet, cardMap: Map<string, CardSet>): DeckStats {
+	const allEntries = [
+		...(deck.commander ?? []),
+		...deck.mainBoard,
+		...deck.sideBoard,
+	];
+
+	const uniqueUuids = new Set(allEntries.map(e => e.uuid));
+	let totalCards = 0;
+	let landCount = 0;
+	let manaValueSum = 0;
+	let nonLandCount = 0;
+	let creatureCount = 0;
+	let instantCount = 0;
+	let sorceryCount = 0;
+	let enchantmentCount = 0;
+	let artifactCount = 0;
+	let planeswalkerCount = 0;
+	let battleCount = 0;
+	let multiTypeCount = 0;
+	const colorIdentitySet = new Set<string>();
+
+	for (const entry of allEntries) {
+		totalCards += entry.count;
+		const card = cardMap.get(entry.uuid);
+		if (!card) continue;
+
+		for (const c of card.colorIdentity ?? []) colorIdentitySet.add(c);
+
+		const types = card.types ?? [];
+		const isLand = types.includes("Land");
+
+		if (isLand) {
+			landCount += entry.count;
+		} else {
+			manaValueSum += (card.manaValue ?? 0) * entry.count;
+			nonLandCount += entry.count;
+		}
+
+		let typeHits = 0;
+		if (types.includes("Creature"))     { creatureCount += entry.count; typeHits++; }
+		if (types.includes("Instant"))      { instantCount += entry.count; typeHits++; }
+		if (types.includes("Sorcery"))      { sorceryCount += entry.count; typeHits++; }
+		if (types.includes("Enchantment"))  { enchantmentCount += entry.count; typeHits++; }
+		if (types.includes("Artifact"))     { artifactCount += entry.count; typeHits++; }
+		if (types.includes("Planeswalker")) { planeswalkerCount += entry.count; typeHits++; }
+		if (types.includes("Battle"))       { battleCount += entry.count; typeHits++; }
+		if (types.includes("Land"))         { typeHits++; }
+		if (typeHits > 1) multiTypeCount += entry.count;
+	}
+
+	return {
+		totalCards,
+		uniqueCards: uniqueUuids.size,
+		avgManaValue: nonLandCount > 0 ? Math.round((manaValueSum / nonLandCount) * 100) / 100 : 0,
+		landCount,
+		colorIdentity: [...colorIdentitySet].sort(),
+		creatureCount,
+		instantCount,
+		sorceryCount,
+		enchantmentCount,
+		artifactCount,
+		planeswalkerCount,
+		battleCount,
+		multiTypeCount,
+	};
+}
+
+function buildDeckRows(setCode: string, decks: DeckSet[], cards: CardSet[]) {
 	const deckRows: AnyRow[] = [], deckCardRows: AnyRow[] = [];
+	const cardMap = new Map<string, CardSet>();
+	for (const card of cards) cardMap.set(card.uuid, card);
+
 	for (const deck of decks) {
-		deckRows.push({ code: deck.code, set_code: setCode, name: deck.name, type: deck.type, release_date: deck.releaseDate, sealed_product_uuids: deck.sealedProductUuids ?? null });
-		for (const card of deck.commander ?? []) deckCardRows.push({ deck_code: deck.code, board_type: "commander", uuid: card.uuid, count: card.count, is_foil: card.isFoil ?? null });
-		for (const card of deck.mainBoard)        deckCardRows.push({ deck_code: deck.code, board_type: "mainBoard",  uuid: card.uuid, count: card.count, is_foil: card.isFoil ?? null });
-		for (const card of deck.sideBoard)        deckCardRows.push({ deck_code: deck.code, board_type: "sideBoard",  uuid: card.uuid, count: card.count, is_foil: card.isFoil ?? null });
+		const stats = computeDeckStats(deck, cardMap);
+		deckRows.push({
+			code: deck.code, uuid: null, set_code: setCode, name: deck.name, type: deck.type,
+			source: "mtgjson", description: null, release_date: deck.releaseDate,
+			sealed_product_uuids: deck.sealedProductUuids ?? null, stats: JSON.stringify(stats),
+			created_at: null, updated_at: null,
+		});
+		for (const card of deck.commander ?? []) deckCardRows.push({ deck_code: deck.code, board_type: "commander", uuid: card.uuid, count: card.count, is_foil: card.isFoil ?? null, collection_item_uuid: null });
+		for (const card of deck.mainBoard)        deckCardRows.push({ deck_code: deck.code, board_type: "mainBoard",  uuid: card.uuid, count: card.count, is_foil: card.isFoil ?? null, collection_item_uuid: null });
+		for (const card of deck.sideBoard)        deckCardRows.push({ deck_code: deck.code, board_type: "sideBoard",  uuid: card.uuid, count: card.count, is_foil: card.isFoil ?? null, collection_item_uuid: null });
 	}
 	return { deckRows, deckCardRows };
 }
@@ -320,7 +397,7 @@ async function processSet(tx: any, set: MTGSet, junctions: JunctionData): Promis
 	await batchInsert(tx, "set_booster_sheet_cards",     boosters.sheetCards);
 	await batchInsert(tx, "set_booster_contents",        boosters.contents);
 	await batchInsert(tx, "set_booster_content_weights", boosters.contentWeights);
-	const decks = buildDeckRows(set.code, set.decks ?? []);
+	const decks = buildDeckRows(set.code, set.decks ?? [], set.cards);
 	await batchInsert(tx, "set_decks",      decks.deckRows);
 	await batchInsert(tx, "set_deck_cards", decks.deckCardRows);
 	if (set.cards.length > 0) {

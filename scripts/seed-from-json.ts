@@ -17,19 +17,7 @@ import parser from "stream-json";
 import pick from "stream-json/filters/Pick.js";
 import streamObject from "stream-json/streamers/StreamObject.js";
 import streamValues from "stream-json/streamers/StreamValues.js";
-import postgres from "postgres";
-import type {
-	CardSet,
-	CardToken,
-	DeckSet,
-	Identifiers,
-	LeadershipSkills,
-	Legalities,
-	PurchaseUrls,
-	SealedProduct,
-	Set as MTGSet,
-	SourceProducts,
-} from "../tempdata/ALLMTGJSONTypes.js";
+import type {	CardSet, CardToken, DeckSet, Identifiers, LeadershipSkills, Legalities,	PurchaseUrls,	SealedProduct, Set as MTGSet,	SourceProducts } from "../tempdata/ALLMTGJSONTypes.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -90,11 +78,7 @@ const MTGJSON_LINK_RE = /^https?:\/\/mtgjson\.com\/links\//;
  * /links/<uuid>/<merchant> so your app controls the redirect and affiliate params.
  * Any URL that doesn't match the MTGJSON pattern is stored as-is.
  */
-function transformPurchaseUrl(
-	url: string | undefined,
-	uuid: string,
-	merchant: string,
-): string | null {
+function transformPurchaseUrl( url: string | undefined, uuid: string, merchant: string ): string | null {
 	if (!url) return null;
 	return MTGJSON_LINK_RE.test(url) ? `/links/${uuid}/${merchant}` : url;
 }

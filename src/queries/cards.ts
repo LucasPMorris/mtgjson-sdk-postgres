@@ -1,6 +1,7 @@
 import type { Connection } from "../connection.js";
 import { SQLBuilder } from "../sql-builder.js";
 import type { CardAtomic, CardSet } from "../types/index.js";
+import { liftRow } from "./_lift.js";
 
 const KNOWN_FORMATS = new Set([ "alchemy",   "brawl",   "commander",       "duel",  "explorer",  "future",  "gladiator",  "historic",  "historicbrawl",  "legacy",   "modern", 	"oathbreaker",
                                 "oldschool", "pauper",  "paupercommander", "penny",	"pioneer",   "predh",   "premodern",  "standard",  "standardbrawl",	 "timeless", "vintage" ]);
@@ -235,36 +236,9 @@ export class CardQuery {
 		}
 	}
 
-	/**
-	 * After snakeToCamel, v_cards exposes flat prefixed keys for nested objects:
-	 *   identifiers_scryfall_id   → identifiersScryfallId  → identifiers.scryfallId
-	 *   purchase_urls_card_kingdom → purchaseUrlsCardKingdom → purchaseUrls.cardKingdom
-	 * This helper lifts those into their proper nested objects.
-	 * All other columns (legalities, leadershipSkills, rulings, foreignData,
-	 * relatedCards, sourceProducts) are already proper JSONB objects in v_cards
-	 * and pass through unchanged after snakeToCamel.
-	 */
-	private _liftRow(row: Record<string, unknown>): Record<string, unknown> {
-		const identifiers: Record<string, unknown> = {};
-		const purchaseUrls: Record<string, unknown> = {};
-		const out: Record<string, unknown> = {};
-		for (const [key, val] of Object.entries(row)) {
-			if (key.length > 11 && key.startsWith("identifiers") && /[A-Z]/.test(key[11])) {
-				identifiers[key[11].toLowerCase() + key.slice(12)] = val;
-			} else if (key.length > 12 && key.startsWith("purchaseUrls") && /[A-Z]/.test(key[12])) {
-				purchaseUrls[key[12].toLowerCase() + key.slice(13)] = val;
-			} else {
-				out[key] = val;
-			}
-		}
-		out.identifiers = identifiers;
-		out.purchaseUrls = purchaseUrls;
-		return out;
-	}
-
 	async getByUuid(uuid: string): Promise<CardSet | null> {
 		const rows = await this._conn.execute("SELECT * FROM v_cards WHERE uuid = $1", [uuid]);
-		return rows.length ? (this._liftRow(rows[0]) as CardSet) : null;
+		return rows.length ? (liftRow(rows[0]) as CardSet) : null;
 	}
 
 	async getByUuids(uuids: string[]): Promise<CardSet[]> {
@@ -272,7 +246,7 @@ export class CardQuery {
 		const q = new SQLBuilder("v_cards").whereIn("uuid", uuids);
 		const [sql, params] = q.build();
 		const rows = await this._conn.execute(sql, params);
-		return rows.map(r => this._liftRow(r)) as CardSet[];
+		return rows.map(r => liftRow(r)) as CardSet[];
 	}
 
 	async getByName( name: string, options?: { setCode?: string } ): Promise<CardSet[]> {
@@ -280,7 +254,7 @@ export class CardQuery {
 		if (options?.setCode) q.whereEq("set_code", options.setCode);
 		q.orderBy("set_code DESC", "number ASC");
 		const [sql, params] = q.build();
-		return (await this._conn.execute(sql, params)).map(r => this._liftRow(r)) as CardSet[];
+		return (await this._conn.execute(sql, params)).map(r => liftRow(r)) as CardSet[];
 	}
 
 	/**
@@ -297,7 +271,7 @@ export class CardQuery {
 
 		const q = new SQLBuilder(view).whereIn("uuid", allFaceIds);
 		const [sql, params] = q.build();
-		const faceRows = (await this._conn.execute(sql, params)).map(r => this._liftRow(r)) as CardSet[];
+		const faceRows = (await this._conn.execute(sql, params)).map(r => liftRow(r)) as CardSet[];
 		const faceMap = new Map<string, CardSet>();
 		for (const f of faceRows) faceMap.set((f as Record<string, unknown>).uuid as string, f);
 
@@ -327,7 +301,7 @@ export class CardQuery {
 		q.limit(limit).offset(offset);
 
 		const [sql, params] = q.build();
-		const rows = (await this._conn.execute(sql, params)).map(r => this._liftRow(r)) as CardSet[];
+		const rows = (await this._conn.execute(sql, params)).map(r => liftRow(r)) as CardSet[];
 		return this._appendOtherFaces(rows, "v_cards");
 	}
 
@@ -348,7 +322,7 @@ export class CardQuery {
 		q.limit(limit).offset(offset);
 
 		const [sql, params] = q.build();
-		const rows = (await this._conn.execute(sql, params)).map(r => this._liftRow(r)) as CardSet[];
+		const rows = (await this._conn.execute(sql, params)).map(r => liftRow(r)) as CardSet[];
 		return this._appendOtherFaces(rows, "v_cards_combined");
 	}
 
@@ -368,7 +342,7 @@ export class CardQuery {
 		q.whereEq("name", name);
 		q.orderBy("is_funny ASC NULLS FIRST", "is_online_only ASC NULLS FIRST", "side ASC NULLS FIRST");
 		const [sql, params] = q.build();
-		let rows = (await this._conn.execute(sql, params)).map(r => this._liftRow(r));
+		let rows = (await this._conn.execute(sql, params)).map(r => liftRow(r));
 
 		// Fallback: search by face_name for split/adventure/MDFC cards
 		if (rows.length === 0) {
@@ -376,7 +350,7 @@ export class CardQuery {
 			q2.whereEq("face_name", name);
 			q2.orderBy("is_funny ASC NULLS FIRST", "is_online_only ASC NULLS FIRST", "side ASC NULLS FIRST" );
 			const [sql2, params2] = q2.build();
-			rows = (await this._conn.execute(sql2, params2)).map(r => this._liftRow(r));
+			rows = (await this._conn.execute(sql2, params2)).map(r => liftRow(r));
 		}
 
 		if (rows.length === 0) return [];
@@ -396,12 +370,12 @@ export class CardQuery {
 
 	async findByScryfallId(scryfallId: string): Promise<CardSet[]> {
 		const sql = "SELECT * FROM v_cards WHERE identifiers_scryfall_id = $1";
-		return (await this._conn.execute(sql, [scryfallId])).map(r => this._liftRow(r)) as CardSet[];
+		return (await this._conn.execute(sql, [scryfallId])).map(r => liftRow(r)) as CardSet[];
 	}
 
 	async random(count = 1): Promise<CardSet[]> {
 		const sql = `SELECT * FROM v_cards ORDER BY RANDOM() LIMIT ${count}`;
-		return (await this._conn.execute(sql)).map(r => this._liftRow(r)) as CardSet[];
+		return (await this._conn.execute(sql)).map(r => liftRow(r)) as CardSet[];
 	}
 
 	/** Count cards matching the given search options (same filters as search()). */

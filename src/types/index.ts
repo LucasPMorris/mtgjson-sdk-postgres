@@ -297,9 +297,61 @@ export type CardType =  { subTypes: string[]; superTypes: string[] };
 export type CardTypes = { artifact: CardType;    battle: CardType;  conspiracy: CardType;    creature: CardType;  enchantment: CardType;  instant: CardType;  land: CardType;
                           phenomenon: CardType;  plane: CardType;   planeswalker: CardType;  scheme: CardType;    sorcery: CardType;      tribal: CardType;   vanguard: CardType; };
 
+/** @deprecated Use PreconDeck instead */
 export type Deck = { code: string; commander?: CardDeck[]; mainBoard: CardDeck[]; name: string; releaseDate: string; sealedProductUuids: string[] | null; sideBoard: CardDeck[]; tokens: CardToken[] | null; type: string };
+/** @deprecated Use DeckCardEntry instead */
 export type DeckList = { code: string; fileName: string; name: string; releaseDate: string; type: string };
+/** @deprecated Use PreconDeck instead */
 export type DeckSet = { code: string; commander?: CardSetDeck[]; mainBoard: CardSetDeck[]; name: string; releaseDate: string; sealedProductUuids: string[] | null; sideBoard: CardSetDeck[]; type: string };
+
+/** Precomputed deck statistics. */
+export type DeckStats = {
+	totalCards: number;
+	uniqueCards: number;
+	avgManaValue: number;
+	landCount: number;
+	colorIdentity: string[];
+	creatureCount: number;
+	instantCount: number;
+	sorceryCount: number;
+	enchantmentCount: number;
+	artifactCount: number;
+	planeswalkerCount: number;
+	battleCount: number;
+	multiTypeCount: number;
+};
+
+/** Minimal deck card entry — maps to a set_deck_cards row. */
+export type DeckCardEntry = { uuid: string; count: number; isFoil?: boolean; collectionItemUuid: string | null };
+
+/** Hydrated deck card (full card data + deck entry metadata). */
+export type DeckCard = CardSet & DeckCardEntry;
+
+/** Hydrated deck token (full token data + deck entry metadata). */
+export type DeckToken = CardToken & DeckCardEntry;
+
+/** Generic board structure. sideBoard/tokens optional to support both precon and user decks without type conflicts. */
+export type DeckBoards<TCard = DeckCard, TToken = DeckToken> = {
+	commander?: TCard[];
+	mainBoard: TCard[];
+	sideBoard?: TCard[];
+	tokens?: TToken[];
+};
+
+/** Full hydrated deck — used for both precon and user decks. */
+export type PreconDeck = DeckBoards & {
+	code: string;
+	uuid: string;
+	name: string;
+	source: string;
+	type: string;
+	description: string | null;
+	releaseDate: string;
+	sealedProductUuids: string[] | null;
+	stats: DeckStats | null;
+	createdAt: string | null;
+	updatedAt: string | null;
+};
 
 export type ForeignData = { faceName?: string; flavorText?: string; identifiers: Identifiers; language: string; name: string; text?: string; type?: string; uuid: string };
 

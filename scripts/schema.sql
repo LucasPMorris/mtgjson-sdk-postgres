@@ -236,19 +236,27 @@ CREATE TABLE set_booster_content_weights (
 );
 
 -- ============================================================
--- set_decks  (preconstructed decks shipped with a set)
+-- set_decks  (preconstructed + user-created decks)
 -- ============================================================
 
 CREATE TABLE set_decks (
-    code                 TEXT    PRIMARY KEY,
-    set_code             TEXT    NOT NULL,
-    name                 TEXT    NOT NULL,
-    type                 TEXT    NOT NULL,
-    release_date         TEXT    NOT NULL,
-    sealed_product_uuids TEXT[]
+    code                 TEXT        PRIMARY KEY,
+    uuid                 TEXT        UNIQUE,
+    set_code             TEXT        NOT NULL,
+    name                 TEXT        NOT NULL,
+    type                 TEXT        NOT NULL,
+    source               TEXT        NOT NULL DEFAULT 'mtgjson',  -- 'mtgjson' | 'user' | 'other'
+    description          TEXT,
+    release_date         TEXT        NOT NULL,
+    sealed_product_uuids TEXT[],
+    stats                JSONB,
+    created_at           TIMESTAMPTZ,
+    updated_at           TIMESTAMPTZ
 );
 
 CREATE INDEX idx_set_decks_set_code ON set_decks (set_code);
+CREATE INDEX idx_set_decks_uuid     ON set_decks (uuid);
+CREATE INDEX idx_set_decks_source   ON set_decks (source);
 
 -- ============================================================
 -- set_deck_cards
@@ -256,12 +264,13 @@ CREATE INDEX idx_set_decks_set_code ON set_decks (set_code);
 -- ============================================================
 
 CREATE TABLE set_deck_cards (
-    id         SERIAL  PRIMARY KEY,
-    deck_code  TEXT    NOT NULL,
-    board_type TEXT    NOT NULL, -- 'commander' | 'mainBoard' | 'sideBoard'
-    uuid       TEXT    NOT NULL,
-    count      INTEGER NOT NULL,
-    is_foil    BOOLEAN
+    id                   SERIAL  PRIMARY KEY,
+    deck_code            TEXT    NOT NULL,
+    board_type           TEXT    NOT NULL, -- 'commander' | 'mainBoard' | 'sideBoard'
+    uuid                 TEXT    NOT NULL,
+    count                INTEGER NOT NULL,
+    is_foil              BOOLEAN,
+    collection_item_uuid TEXT               -- null = pool card, set = from user's collection
 );
 
 CREATE INDEX idx_set_deck_cards_deck_code ON set_deck_cards (deck_code);
