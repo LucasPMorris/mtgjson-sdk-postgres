@@ -262,15 +262,18 @@ function buildDeckRows(setCode: string, decks: DeckSet[]) {
 	const deckCardRows: AnyRow[] = [];
 
 	for (const deck of decks) {
-		deckRows.push({ code: deck.code, set_code: setCode, name: deck.name, type: deck.type, release_date: deck.releaseDate, sealed_product_uuids: deck.sealedProductUuids ?? null });
+		const { createHash } = require("node:crypto");
+		const hash = createHash("sha256").update(`${setCode}:${deck.name}`).digest("hex");
+		const deckUuid = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
+		deckRows.push({ uuid: deckUuid, set_code: setCode, name: deck.name, type: deck.type, source: "mtgjson", description: null, release_date: deck.releaseDate, sealed_product_uuids: deck.sealedProductUuids ?? null, stats: null, created_at: null, updated_at: null });
 		for (const card of deck.commander ?? []) {
-			deckCardRows.push({ deck_code: deck.code, board_type: "commander", uuid: card.uuid, count: card.count, is_foil: card.isFoil ?? null });
+			deckCardRows.push({ deck_uuid: deckUuid, board_type: "commander", uuid: card.uuid, count: card.count, is_foil: card.isFoil ?? null, collection_item_uuid: null });
 		}
 		for (const card of deck.mainBoard) {
-			deckCardRows.push({ deck_code: deck.code, board_type: "mainBoard", uuid: card.uuid, count: card.count, is_foil: card.isFoil ?? null });
+			deckCardRows.push({ deck_uuid: deckUuid, board_type: "mainBoard", uuid: card.uuid, count: card.count, is_foil: card.isFoil ?? null, collection_item_uuid: null });
 		}
 		for (const card of deck.sideBoard) {
-			deckCardRows.push({ deck_code: deck.code, board_type: "sideBoard", uuid: card.uuid, count: card.count, is_foil: card.isFoil ?? null });
+			deckCardRows.push({ deck_uuid: deckUuid, board_type: "sideBoard", uuid: card.uuid, count: card.count, is_foil: card.isFoil ?? null, collection_item_uuid: null });
 		}
 	}
 

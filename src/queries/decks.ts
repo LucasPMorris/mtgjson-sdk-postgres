@@ -53,11 +53,11 @@ export class DeckQuery {
 	}
 
 	/**
-	 * Get a single deck by code, fully hydrated with card data.
+	 * Get a single deck by UUID, fully hydrated with card data.
 	 */
-	async getByCode(code: string): Promise<PreconDeck | null> {
+	async getByUuid(uuid: string): Promise<PreconDeck | null> {
 		const deckRows = await this._conn.execute(
-			"SELECT * FROM set_decks WHERE code = $1", [code]
+			"SELECT * FROM set_decks WHERE uuid = $1", [uuid]
 		);
 		if (!deckRows.length) return null;
 		const results = await this._hydrate(deckRows);
@@ -86,10 +86,10 @@ export class DeckQuery {
 	async _hydrate(deckRows: Record<string, unknown>[]): Promise<PreconDeck[]> {
 		if (!deckRows.length) return [];
 
-		const codes = deckRows.map(r => r.code as string);
+		const deckUuids = deckRows.map(r => r.uuid as string);
 
 		// Fetch all card entries for these decks
-		const entryQ = new SQLBuilder("set_deck_cards").whereIn("deck_code", codes);
+		const entryQ = new SQLBuilder("set_deck_cards").whereIn("deck_uuid", deckUuids);
 		const [entrySql, entryParams] = entryQ.build();
 		const entryRows = await this._conn.execute(entrySql, entryParams);
 
@@ -107,19 +107,19 @@ export class DeckQuery {
 			}
 		}
 
-		// Group entries by deck_code
+		// Group entries by deck_uuid
 		const entriesByDeck = new Map<string, Record<string, unknown>[]>();
 		for (const entry of entryRows) {
-			const dc = entry.deckCode as string;
-			let arr = entriesByDeck.get(dc);
-			if (!arr) { arr = []; entriesByDeck.set(dc, arr); }
+			const du = entry.deckUuid as string;
+			let arr = entriesByDeck.get(du);
+			if (!arr) { arr = []; entriesByDeck.set(du, arr); }
 			arr.push(entry);
 		}
 
 		// Assemble PreconDeck objects
 		return deckRows.map(deck => {
-			const deckCode = deck.code as string;
-			const entries = entriesByDeck.get(deckCode) ?? [];
+			const deckUuid = deck.uuid as string;
+			const entries = entriesByDeck.get(deckUuid) ?? [];
 
 			const commander: DeckCard[] = [];
 			const mainBoard: DeckCard[] = [];
@@ -153,8 +153,8 @@ export class DeckQuery {
 			const stats = deck.stats ? (typeof deck.stats === "string" ? JSON.parse(deck.stats as string) : deck.stats) as DeckStats : null;
 
 			return {
-				code: deckCode,
-				uuid: deck.uuid as string,
+				uuid: deckUuid,
+				setCode: (deck.setCode as string) ?? null,
 				name: deck.name as string,
 				source: deck.source as string,
 				type: deck.type as string,

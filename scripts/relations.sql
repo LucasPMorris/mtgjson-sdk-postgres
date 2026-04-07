@@ -9,7 +9,7 @@ ALTER TABLE set_booster_sheet_cards ADD CONSTRAINT set_booster_sheet_cards_sheet
 ALTER TABLE set_booster_contents ADD CONSTRAINT set_booster_contents_set_code_fkey FOREIGN KEY (set_code) REFERENCES sets (code) ON DELETE CASCADE;
 ALTER TABLE set_booster_content_weights ADD CONSTRAINT set_booster_content_weights_set_code_fkey FOREIGN KEY (set_code) REFERENCES sets (code) ON DELETE CASCADE;
 ALTER TABLE set_decks ADD CONSTRAINT set_decks_set_code_fkey FOREIGN KEY (set_code) REFERENCES sets (code) ON DELETE CASCADE;
-ALTER TABLE set_deck_cards ADD CONSTRAINT set_deck_cards_deck_code_fkey FOREIGN KEY (deck_code) REFERENCES set_decks (code) ON DELETE CASCADE;
+ALTER TABLE set_deck_cards ADD CONSTRAINT set_deck_cards_deck_uuid_fkey FOREIGN KEY (deck_uuid) REFERENCES set_decks (uuid) ON DELETE CASCADE;
 ALTER TABLE cards ADD CONSTRAINT cards_set_code_fkey FOREIGN KEY (set_code) REFERENCES sets (code);
 ALTER TABLE card_identifiers ADD CONSTRAINT card_identifiers_uuid_fkey FOREIGN KEY (uuid) REFERENCES cards (uuid) ON DELETE CASCADE;
 ALTER TABLE card_legalities ADD CONSTRAINT card_legalities_uuid_fkey FOREIGN KEY (uuid) REFERENCES cards (uuid) ON DELETE CASCADE;

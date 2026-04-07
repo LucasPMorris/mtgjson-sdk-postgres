@@ -240,9 +240,8 @@ CREATE TABLE set_booster_content_weights (
 -- ============================================================
 
 CREATE TABLE set_decks (
-    code                 TEXT        PRIMARY KEY,
-    uuid                 TEXT        UNIQUE,
-    set_code             TEXT        NOT NULL,
+    uuid                 TEXT        PRIMARY KEY,
+    set_code             TEXT,                              -- set code for precon decks (e.g. '10E'), null for user decks
     name                 TEXT        NOT NULL,
     type                 TEXT        NOT NULL,
     source               TEXT        NOT NULL DEFAULT 'mtgjson',  -- 'mtgjson' | 'user' | 'other'
@@ -255,8 +254,8 @@ CREATE TABLE set_decks (
 );
 
 CREATE INDEX idx_set_decks_set_code ON set_decks (set_code);
-CREATE INDEX idx_set_decks_uuid     ON set_decks (uuid);
 CREATE INDEX idx_set_decks_source   ON set_decks (source);
+CREATE UNIQUE INDEX idx_set_decks_set_code_name ON set_decks (set_code, name);
 
 -- ============================================================
 -- set_deck_cards
@@ -265,7 +264,7 @@ CREATE INDEX idx_set_decks_source   ON set_decks (source);
 
 CREATE TABLE set_deck_cards (
     id                   SERIAL  PRIMARY KEY,
-    deck_code            TEXT    NOT NULL,
+    deck_uuid            TEXT    NOT NULL,
     board_type           TEXT    NOT NULL, -- 'commander' | 'mainBoard' | 'sideBoard'
     uuid                 TEXT    NOT NULL,
     count                INTEGER NOT NULL,
@@ -273,7 +272,7 @@ CREATE TABLE set_deck_cards (
     collection_item_uuid TEXT               -- null = pool card, set = from user's collection
 );
 
-CREATE INDEX idx_set_deck_cards_deck_code ON set_deck_cards (deck_code);
+CREATE INDEX idx_set_deck_cards_deck_uuid ON set_deck_cards (deck_uuid);
 CREATE INDEX idx_set_deck_cards_uuid      ON set_deck_cards (uuid);
 
 -- ============================================================

@@ -340,8 +340,8 @@ export type DeckBoards<TCard = DeckCard, TToken = DeckToken> = {
 
 /** Full hydrated deck — used for both precon and user decks. */
 export type PreconDeck = DeckBoards & {
-	code: string;
 	uuid: string;
+	setCode: string | null;
 	name: string;
 	source: string;
 	type: string;

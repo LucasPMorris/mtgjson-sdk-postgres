@@ -2,6 +2,7 @@
  * Core database seeding logic extracted from scripts/seed-from-json.ts.
  * Exported so it can be called programmatically (e.g. from sdk.update()).
  */
+import { createHash } from "node:crypto";
 import { createReadStream, readFileSync } from "node:fs";
 import { get as httpsGet } from "node:https";
 import { fileURLToPath } from "node:url";
@@ -231,22 +232,29 @@ function computeDeckStats(deck: DeckSet, cardMap: Map<string, CardSet>): DeckSta
 	};
 }
 
+/** Generate a deterministic UUID from set code + deck name. */
+function generateDeckUuid(setCode: string, name: string): string {
+	const hash = createHash("sha256").update(`${setCode}:${name}`).digest("hex");
+	return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
+}
+
 function buildDeckRows(setCode: string, decks: DeckSet[], cards: CardSet[]) {
 	const deckRows: AnyRow[] = [], deckCardRows: AnyRow[] = [];
 	const cardMap = new Map<string, CardSet>();
 	for (const card of cards) cardMap.set(card.uuid, card);
 
 	for (const deck of decks) {
+		const deckUuid = generateDeckUuid(setCode, deck.name);
 		const stats = computeDeckStats(deck, cardMap);
 		deckRows.push({
-			code: deck.code, uuid: null, set_code: setCode, name: deck.name, type: deck.type,
+			uuid: deckUuid, set_code: setCode, name: deck.name, type: deck.type,
 			source: "mtgjson", description: null, release_date: deck.releaseDate,
 			sealed_product_uuids: deck.sealedProductUuids ?? null, stats: JSON.stringify(stats),
 			created_at: null, updated_at: null,
 		});
-		for (const card of deck.commander ?? []) deckCardRows.push({ deck_code: deck.code, board_type: "commander", uuid: card.uuid, count: card.count, is_foil: card.isFoil ?? null, collection_item_uuid: null });
-		for (const card of deck.mainBoard)        deckCardRows.push({ deck_code: deck.code, board_type: "mainBoard",  uuid: card.uuid, count: card.count, is_foil: card.isFoil ?? null, collection_item_uuid: null });
-		for (const card of deck.sideBoard)        deckCardRows.push({ deck_code: deck.code, board_type: "sideBoard",  uuid: card.uuid, count: card.count, is_foil: card.isFoil ?? null, collection_item_uuid: null });
+		for (const card of deck.commander ?? []) deckCardRows.push({ deck_uuid: deckUuid, board_type: "commander", uuid: card.uuid, count: card.count, is_foil: card.isFoil ?? null, collection_item_uuid: null });
+		for (const card of deck.mainBoard)        deckCardRows.push({ deck_uuid: deckUuid, board_type: "mainBoard",  uuid: card.uuid, count: card.count, is_foil: card.isFoil ?? null, collection_item_uuid: null });
+		for (const card of deck.sideBoard)        deckCardRows.push({ deck_uuid: deckUuid, board_type: "sideBoard",  uuid: card.uuid, count: card.count, is_foil: card.isFoil ?? null, collection_item_uuid: null });
 	}
 	return { deckRows, deckCardRows };
 }

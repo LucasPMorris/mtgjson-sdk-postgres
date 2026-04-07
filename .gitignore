@@ -6,3 +6,5 @@ dist/
 .env*
 tempdata/
 mtgjson-sdk-0.1.0.tgz
+.claude/
+.claude/*

@@ -1,11 +1,14 @@
--- One-time backfill: compute and populate stats JSONB on all existing set_decks rows.
+-- Backfill: compute and populate stats JSONB on all existing set_decks rows.
 -- Run with: psql $DATABASE_URL -f scripts/backfill-deck-stats.sql
+--
+-- NOTE: This requires the new schema (uuid PK, deck_uuid FK).
+-- If migrating from the old schema, run migrate-decks.sql first or do a full re-seed.
 
 UPDATE set_decks sd
 SET stats = sub.stats
 FROM (
     SELECT
-        sdc.deck_code,
+        sdc.deck_uuid,
         jsonb_build_object(
             'totalCards',      SUM(sdc.count),
             'uniqueCards',     COUNT(DISTINCT sdc.uuid),
@@ -21,7 +24,7 @@ FROM (
                                     FROM set_deck_cards sdc2
                                     JOIN cards c2 ON c2.uuid = sdc2.uuid
                                     CROSS JOIN LATERAL unnest(c2.color_identity) AS ci
-                                    WHERE sdc2.deck_code = sdc.deck_code),
+                                    WHERE sdc2.deck_uuid = sdc.deck_uuid),
                                '[]'::jsonb),
             'creatureCount',     SUM(CASE WHEN 'Creature' = ANY(c.types) THEN sdc.count ELSE 0 END),
             'instantCount',      SUM(CASE WHEN 'Instant' = ANY(c.types) THEN sdc.count ELSE 0 END),
@@ -34,6 +37,6 @@ FROM (
         ) AS stats
     FROM set_deck_cards sdc
     LEFT JOIN cards c ON c.uuid = sdc.uuid
-    GROUP BY sdc.deck_code
+    GROUP BY sdc.deck_uuid
 ) sub
-WHERE sd.code = sub.deck_code;
+WHERE sd.uuid = sub.deck_uuid;
