@@ -1,21 +1,12 @@
 import type { Connection } from "../connection.js";
-import type {
-	BoosterConfig,
-	BoosterPack,
-	BoosterSheet,
-	CardSet,
-} from "../types/index.js";
+import type { BoosterConfig, BoosterPack, BoosterSheet, CardSet } from "../types/index.js";
 
 export class BoosterSimulator {
 	private _conn: Connection;
 
-	constructor(conn: Connection) {
-		this._conn = conn;
-	}
+	constructor(conn: Connection) { this._conn = conn; }
 
-	private async _getBoosterConfig(
-		setCode: string,
-	): Promise<Record<string, BoosterConfig> | null> {
+	private async _getBoosterConfig( setCode: string ): Promise<Record<string, BoosterConfig> | null> {
 		const code = setCode.toUpperCase();
 
 		// 1. Sheet metadata
@@ -62,7 +53,7 @@ export class BoosterSimulator {
 			configs[bName].sheets[sName] = {
 				foil: (row.sheetIsFoil as boolean) ?? false,
 				balanceColors: (row.sheetHasBalanceColors as boolean) ?? undefined,
-				totalWeight: (row.sheetTotalWeight as number) ?? 0,
+				totalWeight: Number(row.sheetTotalWeight) || 0,
 				cards: {},
 			};
 		}
@@ -72,10 +63,8 @@ export class BoosterSimulator {
 			const bName = row.boosterName as string;
 			const sName = row.sheetName as string;
 			const cardUuid = row.cardUuid as string;
-			const cardWeight = row.cardWeight as number;
-			if (configs[bName]?.sheets[sName]) {
-				configs[bName].sheets[sName].cards[cardUuid] = cardWeight;
-			}
+			const cardWeight = Number(row.cardWeight);
+			if (configs[bName]?.sheets[sName]) { configs[bName].sheets[sName].cards[cardUuid] = cardWeight; }
 		}
 
 		// Build boosters array per booster name
@@ -83,11 +72,9 @@ export class BoosterSimulator {
 		for (const row of weightRows) {
 			const bName = row.boosterName as string;
 			const idx = row.boosterIndex as number;
-			const weight = row.boosterWeight as number;
+			const weight = Number(row.boosterWeight);
 			if (!configs[bName]) continue;
-			while (configs[bName].boosters.length <= idx) {
-				configs[bName].boosters.push({ contents: {}, weight: 0 });
-			}
+			while (configs[bName].boosters.length <= idx) { configs[bName].boosters.push({ contents: {}, weight: 0 }); }
 			configs[bName].boosters[idx].weight = weight;
 			configs[bName].boostersTotalWeight += weight;
 		}
@@ -98,9 +85,7 @@ export class BoosterSimulator {
 			const idx = row.boosterIndex as number;
 			const sName = row.sheetName as string;
 			const picks = row.sheetPicks as number;
-			if (configs[bName]?.boosters[idx]) {
-				configs[bName].boosters[idx].contents[sName] = picks;
-			}
+			if (configs[bName]?.boosters[idx]) { configs[bName].boosters[idx].contents[sName] = picks; }
 		}
 
 		return Object.keys(configs).length > 0 ? configs : null;
@@ -115,10 +100,7 @@ export class BoosterSimulator {
 	async openPack(setCode: string, boosterType = "draft"): Promise<CardSet[]> {
 		const configs = await this._getBoosterConfig(setCode);
 		if (!configs || !(boosterType in configs)) {
-			throw new Error(
-				`No booster config for set '${setCode}' type '${boosterType}'. ` +
-					`Available: ${configs ? Object.keys(configs) : []}`,
-			);
+			throw new Error( `No booster config for set '${setCode}' type '${boosterType}'. ` + `Available: ${configs ? Object.keys(configs) : []}` );
 		}
 
 		const config = configs[boosterType];
@@ -152,11 +134,7 @@ export class BoosterSimulator {
 		return ordered as CardSet[];
 	}
 
-	async openBox(
-		setCode: string,
-		boosterType = "draft",
-		packs = 36,
-	): Promise<CardSet[][]> {
+	async openBox( setCode: string, boosterType = "draft", packs = 36	): Promise<CardSet[][]> {
 		const results: CardSet[][] = [];
 		for (let i = 0; i < packs; i++) {
 			results.push(await this.openPack(setCode, boosterType));
@@ -164,11 +142,7 @@ export class BoosterSimulator {
 		return results;
 	}
 
-	async sheetContents(
-		setCode: string,
-		boosterType: string,
-		sheetName: string,
-	): Promise<Record<string, number> | null> {
+	async sheetContents( setCode: string, boosterType: string, sheetName: string ): Promise<Record<string, number> | null> {
 		const configs = await this._getBoosterConfig(setCode);
 		if (!configs || !(boosterType in configs)) return null;
 		const sheets = configs[boosterType].sheets ?? {};
@@ -191,9 +165,7 @@ function pickFromSheet(sheet: BoosterSheet, count: number): string[] {
 
 	if (allowDuplicates) {
 		const picked: string[] = [];
-		for (let i = 0; i < count; i++) {
-			picked.push(weightedChoice(uuids, weights));
-		}
+		for (let i = 0; i < count; i++) { picked.push(weightedChoice(uuids, weights)); }
 		return picked;
 	}
 

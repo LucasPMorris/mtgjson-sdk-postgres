@@ -1,6 +1,6 @@
 {
   "name": "mtgjson-sdk",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "PostgreSQL-backed query client for MTGJSON card data",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -14,7 +14,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "scripts/pricing-schema.sql"
   ],
   "scripts": {
     "build": "tsup",

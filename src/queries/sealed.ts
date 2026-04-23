@@ -1,5 +1,6 @@
 import type { Connection } from "../connection.js";
 import { SQLBuilder } from "../sql-builder.js";
+import { collated } from "./_sort-helpers.js";
 
 export class SealedQuery {
 	private _conn: Connection;
@@ -12,7 +13,7 @@ export class SealedQuery {
 		if (options?.setCode) q.whereEq("set_code", options.setCode.toUpperCase());
 		if (options?.category) q.whereEq("category", options.category);
 
-		q.orderBy("set_code ASC", "name ASC");
+		q.orderBy("set_code ASC", `${collated("name")} ASC`);
 		q.limit(options?.limit ?? 100);
 
 		const [sql, params] = q.build();

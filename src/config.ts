@@ -28,12 +28,14 @@ export const PARQUET_FILES: Record<string, string> = {
 
 /** Mapping of logical data names to CDN JSON file paths. */
 export const JSON_FILES: Record<string, string> = {
-	keywords:    "Keywords.json",
-	card_types:  "CardTypes.json",
-	deck_list:   "DeckList.json",
-	enum_values: "EnumValues.json",
-	set_list:    "SetList.json",
-	meta:        "Meta.json",
+	keywords:         "Keywords.json",
+	card_types:       "CardTypes.json",
+	deck_list:        "DeckList.json",
+	enum_values:      "EnumValues.json",
+	set_list:         "SetList.json",
+	meta:             "Meta.json",
+	all_prices:       "AllPrices.json",
+	all_prices_today: "AllPricesToday.json",
 };
 
 /** URL for the MTGJSON version metadata endpoint. */

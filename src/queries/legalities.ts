@@ -1,5 +1,6 @@
 import type { Connection } from "../connection.js";
 import type { CardSet } from "../types/index.js";
+import { collated } from "./_sort-helpers.js";
 
 export class LegalityQuery {
 	private _conn: Connection;
@@ -45,7 +46,7 @@ export class LegalityQuery {
 		const sql = `SELECT DISTINCT c.* FROM cards c
 		             JOIN card_legalities cl ON c.uuid = cl.uuid
 		             WHERE cl.${fmt} = 'Legal'
-		             ORDER BY c.name ASC
+		             ORDER BY ${collated("c.name")} ASC
 		             LIMIT ${limit} OFFSET ${offset}`;
 		return (await this._conn.execute(sql)) as CardSet[];
 	}
@@ -73,7 +74,7 @@ export class LegalityQuery {
 			`SELECT c.name, c.uuid FROM cards c
 			 JOIN card_legalities cl ON c.uuid = cl.uuid
 			 WHERE cl.${fmt} = $1
-			 ORDER BY c.name ASC
+			 ORDER BY ${collated("c.name")} ASC
 			 LIMIT ${limit} OFFSET ${offset}`,
 			[status],
 		);

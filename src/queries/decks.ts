@@ -1,7 +1,8 @@
 import type { Connection } from "../connection.js";
 import { SQLBuilder } from "../sql-builder.js";
-import type { DeckCard, DeckCardEntry, DeckList, DeckStats, DeckToken, PreconDeck } from "../types/index.js";
+import type { DeckCard, DeckCardEntry, DeckList, DeckStats, DeckSummary, DeckToken, PreconDeck } from "../types/index.js";
 import { liftRow } from "./_lift.js";
+import { collated } from "./_sort-helpers.js";
 
 // ---------------------------------------------------------------------------
 // Search options (minimal for now — filters can be added later)
@@ -10,6 +11,27 @@ import { liftRow } from "./_lift.js";
 export type DeckSearchOptions = {
 	limit?: number;
 	offset?: number;
+	includeNonDeckProducts?: boolean;
+};
+
+export type DeckSummarySortField = "name" | "releaseDate" | "type" | "setCode";
+
+export type DeckSummarySearchOptions = {
+	search?: string;
+	setCode?: string[];
+	colors?: string[];
+	sortBy?: DeckSummarySortField;
+	sortDir?: "asc" | "desc";
+	limit?: number;
+	offset?: number;
+	includeNonDeckProducts?: boolean;
+};
+
+const SUMMARY_SORT_COLUMN: Record<DeckSummarySortField, string> = {
+	name:        "name",
+	releaseDate: "release_date",
+	type:        "type",
+	setCode:     "set_code",
 };
 
 // ---------------------------------------------------------------------------
@@ -28,7 +50,7 @@ export class DeckQuery {
 		if (options?.setCode) q.whereEq("set_code", options.setCode.toUpperCase());
 		if (options?.deckType) q.whereEq("type", options.deckType);
 
-		q.orderBy("set_code DESC", "name ASC");
+		q.orderBy("set_code DESC", `${collated("name")} ASC`);
 
 		const [sql, params] = q.build();
 		return (await this._conn.execute(sql, params)) as DeckList[];
@@ -36,6 +58,8 @@ export class DeckQuery {
 
 	/**
 	 * Search decks and return fully hydrated results with card data in boards.
+	 * By default, only returns decks linked to a sealed product with category = 'deck'
+	 * and no variable content. Pass `includeNonDeckProducts: true` to return all decks.
 	 */
 	async search(options?: DeckSearchOptions): Promise<PreconDeck[]> {
 		const opts = options ?? {};
@@ -43,7 +67,12 @@ export class DeckQuery {
 		const offset = opts.offset ?? 0;
 
 		const q = new SQLBuilder("set_decks");
-		q.orderBy("set_code DESC", "name ASC");
+
+		if (!opts.includeNonDeckProducts) {
+			q.where("sealed_product_uuids && (SELECT ARRAY_AGG(uuid) FROM sealed_product WHERE category = 'deck')");
+		}
+
+		q.orderBy("set_code DESC", `${collated("name")} ASC`);
 		q.limit(limit).offset(offset);
 
 		const [sql, params] = q.build();
@@ -64,13 +93,96 @@ export class DeckQuery {
 		return results[0] ?? null;
 	}
 
-	async count(): Promise<number> { return (((await this._conn.executeScalar("SELECT COUNT(*) FROM set_decks" )) as number) ?? 0 ); }
+	async count(options?: { includeNonDeckProducts?: boolean }): Promise<number> {
+		const sql = options?.includeNonDeckProducts
+			? "SELECT COUNT(*) FROM set_decks"
+			: "SELECT COUNT(*) FROM set_decks WHERE sealed_product_uuids && (SELECT ARRAY_AGG(uuid) FROM sealed_product WHERE category = 'deck')";
+		return (((await this._conn.executeScalar(sql)) as number) ?? 0);
+	}
 
 	/**
 	 * Create a sliding-window paginator over hydrated decks.
 	 */
 	async paginate(opts?: Omit<DeckSearchOptions, "limit" | "offset">, pageSize = 20): Promise<DeckPaginator> {
 		return DeckPaginator.create(this, opts, pageSize);
+	}
+
+	// -----------------------------------------------------------------------
+	// Light summary queries (no card hydration — list-scale reads)
+	// -----------------------------------------------------------------------
+
+	private _applySummaryFilters(q: SQLBuilder, opts: DeckSummarySearchOptions): void {
+		if (!opts.includeNonDeckProducts) {
+			q.where("sealed_product_uuids && (SELECT ARRAY_AGG(uuid) FROM sealed_product WHERE category = 'deck')");
+		}
+		if (opts.search) {
+			q.where("(name ILIKE $1 OR set_code ILIKE $1)", `%${opts.search}%`);
+		}
+		if (opts.setCode && opts.setCode.length > 0) {
+			q.whereIn("set_code", opts.setCode);
+		}
+		if (opts.colors && opts.colors.length > 0) {
+			q.where("COALESCE(stats->'colorIdentity', '[]'::jsonb) ?& $1::text[]", opts.colors);
+		}
+	}
+
+	/**
+	 * Return lightweight deck rows (set_decks columns + precomputed per-board
+	 * counts + a cover scryfallId). No card arrays are loaded, making this the
+	 * right entry point for list surfaces that only render name / type / cover.
+	 */
+	async listSummaries(options?: DeckSummarySearchOptions): Promise<DeckSummary[]> {
+		const opts = options ?? {};
+		const limit = opts.limit ?? 20;
+		const offset = opts.offset ?? 0;
+		const sortCol = SUMMARY_SORT_COLUMN[opts.sortBy ?? "releaseDate"];
+		const sortDir = (opts.sortDir ?? "desc").toUpperCase() === "ASC" ? "ASC" : "DESC";
+
+		const q = new SQLBuilder("set_decks").select(
+			"*",
+			"(SELECT COALESCE(SUM(count), 0)::int FROM set_deck_cards WHERE deck_uuid = set_decks.uuid AND board_type = 'commander') AS commander_count",
+			"(SELECT COALESCE(SUM(count), 0)::int FROM set_deck_cards WHERE deck_uuid = set_decks.uuid AND board_type = 'mainBoard') AS main_board_count",
+			"(SELECT COALESCE(SUM(count), 0)::int FROM set_deck_cards WHERE deck_uuid = set_decks.uuid AND board_type = 'sideBoard') AS side_board_count",
+			"(SELECT c.identifiers_scryfall_id FROM set_deck_cards sdc JOIN v_cards_combined c ON c.uuid = sdc.uuid WHERE sdc.deck_uuid = set_decks.uuid ORDER BY CASE sdc.board_type WHEN 'commander' THEN 0 WHEN 'mainBoard' THEN 1 ELSE 2 END LIMIT 1) AS cover_scryfall_id",
+		);
+		this._applySummaryFilters(q, opts);
+		q.orderBy(`${sortCol} ${sortDir} NULLS LAST`, `${collated("name")} ASC`);
+		q.limit(limit).offset(offset);
+
+		const [sql, params] = q.build();
+		const rows = await this._conn.execute(sql, params);
+		return rows.map(r => this._liftSummary(r));
+	}
+
+	/** Count rows matching the same filters as `listSummaries`. */
+	async countSummaries(options?: DeckSummarySearchOptions): Promise<number> {
+		const q = new SQLBuilder("set_decks").select("COUNT(*)");
+		this._applySummaryFilters(q, options ?? {});
+		const [sql, params] = q.build();
+		return ((await this._conn.executeScalar(sql, params)) as number) ?? 0;
+	}
+
+	private _liftSummary(row: Record<string, unknown>): DeckSummary {
+		const rawStats = row.stats;
+		const stats = rawStats ? (typeof rawStats === "string" ? JSON.parse(rawStats as string) : rawStats) as DeckStats : null;
+		return {
+			uuid:               row.uuid as string,
+			setCode:            (row.setCode as string) ?? null,
+			setName:            (row.setName as string) ?? null,
+			name:               row.name as string,
+			source:             row.source as string,
+			type:               row.type as string,
+			description:        (row.description as string) ?? null,
+			releaseDate:        row.releaseDate as string,
+			sealedProductUuids: (row.sealedProductUuids as string[]) ?? null,
+			stats,
+			createdAt:          (row.createdAt as string) ?? null,
+			updatedAt:          (row.updatedAt as string) ?? null,
+			commanderCount:     (row.commanderCount as number) ?? 0,
+			mainBoardCount:     (row.mainBoardCount as number) ?? 0,
+			sideBoardCount:     (row.sideBoardCount as number) ?? 0,
+			coverScryfallId:    (row.coverScryfallId as string) ?? null,
+		};
 	}
 
 	// -----------------------------------------------------------------------
@@ -155,6 +267,7 @@ export class DeckQuery {
 			return {
 				uuid: deckUuid,
 				setCode: (deck.setCode as string) ?? null,
+				setName: (deck.setName as string) ?? null,
 				name: deck.name as string,
 				source: deck.source as string,
 				type: deck.type as string,

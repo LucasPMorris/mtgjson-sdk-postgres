@@ -1,12 +1,21 @@
 import { BoosterSimulator } from "./booster/simulator.js";
 import { CacheManager, type ProgressCallback } from "./cache.js";
 import { Connection } from "./connection.js";
-import { CardQuery, DeckQuery, EnumQuery, IdentifierQuery, LegalityQuery, PriceQuery, SealedQuery, SetQuery, SkuQuery, TokenQuery } from "./queries/index.js";
+import { CardQuery, CollectionQuery, DeckQuery, EnumQuery, IdentifierQuery, LegalityQuery, PriceQuery, SealedQuery, SetQuery, SkuQuery, TokenQuery } from "./queries/index.js";
+import { setNameCollation } from "./queries/_sort-helpers.js";
 import { seedCatalogs } from "./seeder.js";
-import { checkForSetUpdates, applySetUpdates, type UpdateCheckResult, type UpdateResult, type UpdateProgress } from "./updater.js";
+import { checkForSetUpdates, applySetUpdates, refreshMaterializedViews, type UpdateCheckResult, type UpdateResult, type UpdateProgress } from "./updater.js";
+import { ensurePricingSchema, updatePricingFull, updatePricingToday, type UpdatePricingOptions, type UpdatePricingResult } from "./pricing.js";
 
-/** PostgreSQL connection URL. Falls back to DATABASE_URL env var. */
-export interface MtgjsonSDKOptions { databaseUrl?: string; cacheDir?: string; offline?: boolean; timeout?: number;	onProgress?: ProgressCallback; staleCheckTtlMs?: number; }
+/**
+ * PostgreSQL connection URL. Falls back to DATABASE_URL env var.
+ *
+ * `nameCollation` controls the collation appended to text ORDER BY clauses so sort
+ * results stay consistent across Postgres installations with different default locales
+ * (e.g. local `C.UTF-8` vs Render `en_US.UTF-8`). Defaults to `"C"`; pass `null` to
+ * opt out and use the database's default collation.
+ */
+export interface MtgjsonSDKOptions { databaseUrl?: string; cacheDir?: string; offline?: boolean; timeout?: number;	onProgress?: ProgressCallback; staleCheckTtlMs?: number; nameCollation?: string | null; }
 
 export class MtgjsonSDK {
 	private _cache: CacheManager;
@@ -23,6 +32,7 @@ export class MtgjsonSDK {
 	private _legalities: LegalityQuery | null = null;
 	private _tokens: TokenQuery | null = null;
 	private _enums: EnumQuery | null = null;
+	private _collections: CollectionQuery | null = null;
 	private _booster: BoosterSimulator | null = null;
 
 	private constructor(options?: MtgjsonSDKOptions) { this._cache = new CacheManager({ cacheDir: options?.cacheDir, offline: options?.offline, timeout: options?.timeout, onProgress: options?.onProgress, staleCheckTtlMs: options?.staleCheckTtlMs }); }
@@ -33,6 +43,7 @@ export class MtgjsonSDK {
 		const url = options?.databaseUrl ?? process.env.DATABASE_URL ?? "postgresql://localhost/mtgjson";
 		sdk._connectionUrl = url;
 		sdk._conn = Connection.create(url);
+		if (options && "nameCollation" in options) setNameCollation(options.nameCollation ?? null);
 		return sdk;
 	}
 
@@ -86,6 +97,11 @@ export class MtgjsonSDK {
 		return this._enums;
 	}
 
+	get collections(): CollectionQuery {
+		if (!this._collections) this._collections = new CollectionQuery(this._conn);
+		return this._collections;
+	}
+
 	get booster(): BoosterSimulator {
 		if (!this._booster) this._booster = new BoosterSimulator(this._conn);
 		return this._booster;
@@ -114,12 +130,34 @@ export class MtgjsonSDK {
 	 */
 	async update(options?: { sets?: string[];	timeout?: number;	onProgress?: (progress: UpdateProgress) => void; }): Promise<UpdateResult> { return applySetUpdates(this._connectionUrl, options); }
 
+	/**
+	 * Refresh the denormalized materialized views (`v_cards`, `v_tokens`, `v_cards_combined`)
+	 * that the SDK's read API queries. `update()` already calls this at the end of a run, so
+	 * only call it directly after out-of-band base-table writes (e.g. a standalone `seedSingleSet`).
+	 */
+	async refreshViews(): Promise<void> { return refreshMaterializedViews(this._connectionUrl); }
+
 	/** Re-download Keywords, CardTypes, and EnumValues from MTGJSON and upsert into the catalogs table. */
 	async refreshCatalogs(options?: { timeout?: number }): Promise<number> {
 		const pg = (await import("postgres")).default(this._connectionUrl);
 		try { return await seedCatalogs(pg, options); }
 		finally { await pg.end(); }
 	}
+
+	/** Ensure the pricing schema (tables, hypertable, continuous aggregates, trigger) is applied. Safe to call repeatedly. */
+	async ensurePricingSchema(): Promise<void> { return ensurePricingSchema(this._connectionUrl); }
+
+	/**
+	 * Seed/refresh pricing from MTGJSON's `AllPrices.json` (90-day history).
+	 * Writes change-only rows to `prices_daily`. Re-runnable; PK conflicts ignored.
+	 */
+	async updatePricingFull(options?: UpdatePricingOptions): Promise<UpdatePricingResult> { return updatePricingFull(this._connectionUrl, options); }
+
+	/**
+	 * Daily delta ingest from MTGJSON's `AllPricesToday.json`.
+	 * Only writes rows for combos whose price changed since the last run.
+	 */
+	async updatePricingToday(options?: UpdatePricingOptions): Promise<UpdatePricingResult> { return updatePricingToday(this._connectionUrl, options); }
 
 	async close(): Promise<void> {
   	await this._conn.close();

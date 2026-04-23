@@ -114,9 +114,14 @@ async function batchInsert(db: any, table: string, rows: AnyRow[]): Promise<void
 
 // ── Row builders ──────────────────────────────────────────────────────────────
 
+function formatSetType(type: string | null | undefined): string | null {
+	if (!type) return null;
+	return type.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+
 function buildSetRow(set: MTGSet): AnyRow {
 	return {
-		code: set.code, name: set.name ?? null, type: set.type ?? null,
+		code: set.code, name: set.name ?? null, type: formatSetType(set.type),
 		release_date: set.releaseDate ?? null, base_set_size: set.baseSetSize ?? 0,
 		total_set_size: set.totalSetSize ?? 0, block: set.block ?? null,
 		cardsphere_set_id: set.cardsphereSetId ?? null, is_foil_only: set.isFoilOnly ?? false,
@@ -238,7 +243,7 @@ function generateDeckUuid(setCode: string, name: string): string {
 	return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
 }
 
-function buildDeckRows(setCode: string, decks: DeckSet[], cards: CardSet[]) {
+function buildDeckRows(setCode: string, setName: string, decks: DeckSet[], cards: CardSet[]) {
 	const deckRows: AnyRow[] = [], deckCardRows: AnyRow[] = [];
 	const cardMap = new Map<string, CardSet>();
 	for (const card of cards) cardMap.set(card.uuid, card);
@@ -247,7 +252,7 @@ function buildDeckRows(setCode: string, decks: DeckSet[], cards: CardSet[]) {
 		const deckUuid = generateDeckUuid(setCode, deck.name);
 		const stats = computeDeckStats(deck, cardMap);
 		deckRows.push({
-			uuid: deckUuid, set_code: setCode, name: deck.name, type: deck.type,
+			uuid: deckUuid, set_code: setCode, set_name: setName, name: deck.name, type: deck.type.replace(/ Deck$/, ""),
 			source: "mtgjson", description: null, release_date: deck.releaseDate,
 			sealed_product_uuids: deck.sealedProductUuids ?? null, stats: JSON.stringify(stats),
 			created_at: null, updated_at: null,
@@ -270,9 +275,9 @@ function buildCardRows(cards: CardSet[], setName: string) {
 			ascii_name: card.asciiName ?? null, attraction_lights: card.attractionLights ?? null,
 			availability: card.availability, booster_types: card.boosterTypes ?? null, border_color: card.borderColor,
 			card_parts: card.cardParts ?? null, color_identity: card.colorIdentity, color_indicator: card.colorIndicator ?? null,
-			colors: card.colors, converted_mana_cost: card.convertedManaCost ?? null, defense: card.defense ?? null,
+			colors: card.colors, defense: card.defense ?? null,
 			duel_deck: card.duelDeck ?? null, edhrec_rank: card.edhrecRank ?? null, edhrec_saltiness: card.edhrecSaltiness ?? null,
-			face_converted_mana_cost: card.faceConvertedManaCost ?? null, face_flavor_name: card.faceFlavorName ?? null,
+			face_flavor_name: card.faceFlavorName ?? null,
 			face_mana_value: card.faceManaValue ?? null, face_name: card.faceName ?? null, finishes: card.finishes,
 			flavor_name: card.flavorName ?? null, flavor_text: card.flavorText ?? null, frame_effects: card.frameEffects ?? null,
 			frame_version: card.frameVersion, hand: card.hand ?? null, has_alternative_deck_limit: card.hasAlternativeDeckLimit ?? null,
@@ -289,13 +294,14 @@ function buildCardRows(cards: CardSet[], setName: string) {
 			original_text: card.originalText ?? null, original_type: card.originalType ?? null,
 			other_face_ids: card.otherFaceIds ?? null, power: card.power ?? null,
 			printed_name: (c.printedName as string) ?? null, printed_text: (c.printedText as string) ?? null,
-			printed_type: (c.printedType as string) ?? null, face_printed_name: (c.facePrintedName as string) ?? null,
+			printed_type: (c.printedType as string) ?? null,
 			printings: card.printings ?? null, promo_types: card.promoTypes ?? null, rarity: card.rarity,
 			rebalanced_printings: card.rebalancedPrintings ?? null, security_stamp: card.securityStamp ?? null,
 			side: card.side ?? null, signature: (c.signature as string) ?? null, subsets: card.subsets ?? null,
 			subtypes: card.subtypes, supertypes: card.supertypes, text: card.text ?? null,
 			toughness: card.toughness ?? null, type: card.type, types: card.types,
 			variations: card.variations ?? null, watermark: card.watermark ?? null,
+			first_print: null, is_rollup_canonical: null,
 		});
 		identifierRows.push({ uuid: card.uuid, ...mapIdentifiers(card.identifiers) });
 		legalityRows.push({ uuid: card.uuid, ...mapLegalities((c.legalities as Legalities | undefined)) });
@@ -405,7 +411,7 @@ async function processSet(tx: any, set: MTGSet, junctions: JunctionData): Promis
 	await batchInsert(tx, "set_booster_sheet_cards",     boosters.sheetCards);
 	await batchInsert(tx, "set_booster_contents",        boosters.contents);
 	await batchInsert(tx, "set_booster_content_weights", boosters.contentWeights);
-	const decks = buildDeckRows(set.code, set.decks ?? [], set.cards);
+	const decks = buildDeckRows(set.code, set.name, set.decks ?? [], set.cards);
 	await batchInsert(tx, "set_decks",      decks.deckRows);
 	await batchInsert(tx, "set_deck_cards", decks.deckCardRows);
 	if (set.cards.length > 0) {
@@ -444,6 +450,59 @@ async function processSet(tx: any, set: MTGSet, junctions: JunctionData): Promis
 		await batchInsert(tx, "token_identifiers", t.identifierRows);
 	}
 	collectJunctions(junctions, set.cards, set.tokens);
+}
+
+// ── Derived card flags ───────────────────────────────────────────────────────
+
+/**
+ * Populate `cards.first_print` and `cards.is_rollup_canonical`. When `setCode`
+ * is provided, only rows in that set are touched — safe because per-row inputs
+ * (`printings`, `variations`) are written once at insert (ON CONFLICT DO NOTHING)
+ * and adding a later set never changes the earliest entry in an existing row's
+ * `printings` array. Call with no `setCode` during a full seed.
+ *
+ * first_print: true when the card's set_code matches the earliest-released
+ * set in its `printings` array (ties broken by set code). Cards with empty
+ * or single-entry `printings` are trivially first prints.
+ *
+ * is_rollup_canonical: within a (name, set_code) variation group, the row
+ * with the lowest numeric collector number wins; non-numeric numbers sort
+ * last. Cards without siblings (variations IS NULL / empty) are trivially
+ * canonical.
+ */
+// biome-ignore lint/suspicious/noExplicitAny: postgres.js transaction type
+async function finalizeCardFlags(db: any, setCode?: string): Promise<void> {
+	const scope = setCode ? `WHERE set_code = '${setCode.replace(/'/g, "''")}'` : "";
+
+	await db.unsafe(`
+		UPDATE cards c SET first_print = (
+			c.printings IS NULL
+			OR cardinality(c.printings) <= 1
+			OR c.set_code = (
+				SELECT s.code FROM sets s
+				WHERE s.code = ANY(c.printings)
+				ORDER BY s.release_date ASC, s.code ASC
+				LIMIT 1
+			)
+		) ${scope};
+	`);
+
+	await db.unsafe(`UPDATE cards SET is_rollup_canonical = TRUE ${scope};`);
+	await db.unsafe(`
+		WITH ranked AS (
+			SELECT uuid,
+				ROW_NUMBER() OVER (
+					PARTITION BY name, set_code
+					ORDER BY
+						(CASE WHEN number ~ '^[0-9]+$' THEN number::INTEGER ELSE 999999 END) ASC,
+						uuid ASC
+				) AS rn
+			FROM cards
+			${scope ? `${scope} AND` : "WHERE"} variations IS NOT NULL AND cardinality(variations) > 0
+		)
+		UPDATE cards c SET is_rollup_canonical = FALSE
+		FROM ranked r WHERE c.uuid = r.uuid AND r.rn > 1;
+	`);
 }
 
 // ── Catalog seeding ──────────────────────────────────────────────────────────
@@ -508,7 +567,11 @@ function buildCatalogRows(
 	for (const [category, nested] of Object.entries(enumValues.data)) {
 		for (const [name, values] of Object.entries(nested)) {
 			if (EXCLUDED_ENUM_KEYS.has(`${category}.${name}`)) continue;
-			add(category, name, Array.isArray(values) ? values : []);
+			const arr = Array.isArray(values) ? values : [];
+			const transformed = category === "set" && name === "type"
+				? arr.map((v) => formatSetType(v) ?? v)
+				: arr;
+			add(category, name, transformed);
 		}
 	}
 
@@ -619,6 +682,10 @@ export async function seedDatabase(	connectionUrl: string, allPrintingsPath: str
 		// Catalogs (keywords, card types, enum values)
 		await seedCatalogs(db);
 
+		// Derived card flags (first_print, is_rollup_canonical) — must run
+		// before relations.sql because the materialized views read these columns.
+		await finalizeCardFlags(db);
+
 		// Relations / indexes
 		await db.unsafe(relationsSql);
 
@@ -646,6 +713,11 @@ export async function seedSingleSet( connectionUrl: string,	set: MTGSet ): Promi
 			{ table: "card_source_products",  rows: junctions.cardSourceProducts },
 			{ table: "token_source_products", rows: junctions.tokenSourceProducts },
 		]) { await batchInsert(db, table, rows); }
+
+		// Flags are scoped to this set: existing rows' inputs are stable
+		// (ON CONFLICT DO NOTHING), so adding a later set never needs to
+		// recompute older rows.
+		await finalizeCardFlags(db, set.code);
 
 		return { cards: set.cards.length, tokens: set.tokens.length };
 	} finally {	await db.end(); }

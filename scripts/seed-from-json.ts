@@ -151,11 +151,16 @@ async function batchInsert( db: any, table: string,rows: AnyRow[] ): Promise<voi
 // Row builders
 // ---------------------------------------------------------------------------
 
+function formatSetType(type: string | null | undefined): string | null {
+	if (!type) return null;
+	return type.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+
 function buildSetRow(set: MTGSet): AnyRow {
 	return {
 		code:               set.code,
 		name:               set.name               ?? null,
-		type:               set.type               ?? null,
+		type:               formatSetType(set.type),
 		release_date:       set.releaseDate        ?? null,
 		base_set_size:      set.baseSetSize        ?? 0,
 		total_set_size:     set.totalSetSize       ?? 0,
@@ -257,7 +262,7 @@ function buildBoosterRows(set: MTGSet) {
 	return { sheets, sheetCards, contents, contentWeights };
 }
 
-function buildDeckRows(setCode: string, decks: DeckSet[]) {
+function buildDeckRows(setCode: string, setName: string, decks: DeckSet[]) {
 	const deckRows: AnyRow[] = [];
 	const deckCardRows: AnyRow[] = [];
 
@@ -265,7 +270,7 @@ function buildDeckRows(setCode: string, decks: DeckSet[]) {
 		const { createHash } = require("node:crypto");
 		const hash = createHash("sha256").update(`${setCode}:${deck.name}`).digest("hex");
 		const deckUuid = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
-		deckRows.push({ uuid: deckUuid, set_code: setCode, name: deck.name, type: deck.type, source: "mtgjson", description: null, release_date: deck.releaseDate, sealed_product_uuids: deck.sealedProductUuids ?? null, stats: null, created_at: null, updated_at: null });
+		deckRows.push({ uuid: deckUuid, set_code: setCode, set_name: setName, name: deck.name, type: deck.type.replace(/ Deck$/, ""), source: "mtgjson", description: null, release_date: deck.releaseDate, sealed_product_uuids: deck.sealedProductUuids ?? null, stats: null, created_at: null, updated_at: null });
 		for (const card of deck.commander ?? []) {
 			deckCardRows.push({ deck_uuid: deckUuid, board_type: "commander", uuid: card.uuid, count: card.count, is_foil: card.isFoil ?? null, collection_item_uuid: null });
 		}
@@ -307,12 +312,10 @@ function buildCardRows(cards: CardSet[], setName: string) {
 			color_identity:             card.colorIdentity,
 			color_indicator:            card.colorIndicator          ?? null,
 			colors:                     card.colors,
-			converted_mana_cost:        card.convertedManaCost       ?? null,
 			defense:                    card.defense                 ?? null,
 			duel_deck:                  card.duelDeck                ?? null,
 			edhrec_rank:                card.edhrecRank              ?? null,
 			edhrec_saltiness:           card.edhrecSaltiness         ?? null,
-			face_converted_mana_cost:   card.faceConvertedManaCost   ?? null,
 			face_flavor_name:           card.faceFlavorName          ?? null,
 			face_mana_value:            card.faceManaValue           ?? null,
 			face_name:                  card.faceName                ?? null,
@@ -540,7 +543,7 @@ async function processSet(tx: any, set: MTGSet, junctions: JunctionData): Promis
 	await batchInsert(tx, "set_booster_content_weights", boosters.contentWeights);
 
 	// 5. Decks (FK: sets)
-	const decks = buildDeckRows(set.code, set.decks ?? []);
+	const decks = buildDeckRows(set.code, set.name, set.decks ?? []);
 	await batchInsert(tx, "set_decks",      decks.deckRows);
 	await batchInsert(tx, "set_deck_cards", decks.deckCardRows);
 

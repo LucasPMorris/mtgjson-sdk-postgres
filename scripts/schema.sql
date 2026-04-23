@@ -11,6 +11,8 @@
 
 -- Drop order: children before parents
 
+-- THIS IS NOT EXHAUSTIVE: Just for reference when making manual updates. Some tables may be missing if they were added after this comment was written.
+
 DROP TABLE IF EXISTS token_source_products       CASCADE;
 DROP TABLE IF EXISTS token_related_cards         CASCADE;
 DROP TABLE IF EXISTS token_identifiers           CASCADE;
@@ -242,6 +244,7 @@ CREATE TABLE set_booster_content_weights (
 CREATE TABLE set_decks (
     uuid                 TEXT        PRIMARY KEY,
     set_code             TEXT,                              -- set code for precon decks (e.g. '10E'), null for user decks
+    set_name             TEXT,
     name                 TEXT        NOT NULL,
     type                 TEXT        NOT NULL,
     source               TEXT        NOT NULL DEFAULT 'mtgjson',  -- 'mtgjson' | 'user' | 'other'
@@ -296,12 +299,10 @@ CREATE TABLE cards (
     color_identity            TEXT[]   NOT NULL,
     color_indicator           TEXT[],
     colors                    TEXT[]   NOT NULL,
-    converted_mana_cost       FLOAT,
     defense                   TEXT,
     duel_deck                 TEXT,
     edhrec_rank               INTEGER,
     edhrec_saltiness          FLOAT,
-    face_converted_mana_cost  FLOAT,
     face_flavor_name          TEXT,
     face_mana_value           FLOAT,
     face_name                 TEXT,
@@ -362,10 +363,14 @@ CREATE TABLE cards (
     type                      TEXT     NOT NULL,
     types                     TEXT[]   NOT NULL,
     variations                TEXT[],
-    watermark                 TEXT
+    watermark                 TEXT,
+    first_print               BOOLEAN,
+    is_rollup_canonical       BOOLEAN
 );
 
 CREATE INDEX idx_cards_set_code       ON cards (set_code);
+CREATE INDEX idx_cards_first_print         ON cards (first_print);
+CREATE INDEX idx_cards_is_rollup_canonical ON cards (is_rollup_canonical);
 CREATE INDEX idx_cards_set_name       ON cards (set_name);
 CREATE INDEX idx_cards_name           ON cards (name);
 CREATE INDEX idx_cards_mana_value     ON cards (mana_value);

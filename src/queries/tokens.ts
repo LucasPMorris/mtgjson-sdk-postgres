@@ -1,6 +1,7 @@
 import type { Connection } from "../connection.js";
 import { SQLBuilder } from "../sql-builder.js";
 import type { CardToken } from "../types/index.js";
+import { collated } from "./_sort-helpers.js";
 
 export class TokenQuery {
 	private _conn: Connection;
@@ -22,7 +23,7 @@ export class TokenQuery {
 	async getByName( name: string, options?: { setCode?: string }	): Promise<CardToken[]> {
     const q = new SQLBuilder("tokens").whereEq("name", name);
 		if (options?.setCode) q.whereEq("set_code", options.setCode);
-		q.orderBy("set_code DESC", "number ASC");
+		q.orderBy("set_code DESC", `${collated("number")} ASC`);
 		const [sql, params] = q.build();
 		return (await this._conn.execute(sql, params)) as CardToken[];
 	}
@@ -40,7 +41,7 @@ export class TokenQuery {
 
 		if (options?.colors) { for (const color of options.colors) { const idx = q._params.length + 1; q._where.push(`$${idx} = ANY(colors)`); q._params.push(color);	} }
 
-		q.orderBy("name ASC", "number ASC");
+		q.orderBy(`${collated("name")} ASC`, `${collated("number")} ASC`);
 		q.limit(options?.limit ?? 100).offset(options?.offset ?? 0);
 
 		const [sql, params] = q.build();

@@ -39,7 +39,7 @@ describe("SetQuery", () => {
 	});
 
 	it("list by type", async () => {
-		const results = await sets.list({ setType: "masters" });
+		const results = await sets.list({ setType: "Masters" });
 		expect(results).toHaveLength(1);
 		expect(results[0].code).toBe("A25");
 	});

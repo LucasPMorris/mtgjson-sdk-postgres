@@ -335,12 +335,10 @@ SELECT
     c.color_identity,
     c.color_indicator,
     c.colors,
-    c.converted_mana_cost,
     c.defense,
     c.duel_deck,
     c.edhrec_rank,
     c.edhrec_saltiness,
-    c.face_converted_mana_cost,
     c.face_flavor_name,
     c.face_mana_value,
     c.face_name,
@@ -402,6 +400,8 @@ SELECT
     c.types,
     c.variations,
     c.watermark,
+    c.first_print,
+    c.is_rollup_canonical,
 
     -- joined columns from v_cards
     c.identifiers_abu_id,
@@ -467,12 +467,10 @@ SELECT
     t.color_identity,
     t.color_indicator,
     t.colors,
-    NULL::FLOAT                       AS converted_mana_cost,
     NULL::TEXT                        AS defense,
     NULL::TEXT                        AS duel_deck,
     NULL::INTEGER                     AS edhrec_rank,
     t.edhrec_saltiness,
-    NULL::FLOAT                       AS face_converted_mana_cost,
     t.face_flavor_name,
     NULL::FLOAT                       AS face_mana_value,
     t.face_name,
@@ -534,6 +532,8 @@ SELECT
     t.types,
     NULL::TEXT[]                       AS variations,
     t.watermark,
+    NULL::BOOLEAN                     AS first_print,
+    NULL::BOOLEAN                     AS is_rollup_canonical,
 
     -- identifiers from v_tokens
     t.identifiers_abu_id,

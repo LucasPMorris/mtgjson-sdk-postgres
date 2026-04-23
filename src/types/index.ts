@@ -7,11 +7,9 @@ export type CardAtomic = {
   colorIdentity: string[];
   colorIndicator?: string[];
   colors: string[];
-  convertedManaCost: number;
   defense?: string;
   edhrecRank?: number;
   edhrecSaltiness?: number;
-  faceConvertedManaCost?: number;
   faceManaValue?: number;
   faceName?: string;
   firstPrinting?: string;
@@ -58,13 +56,11 @@ export type CardDeck = {
   colorIdentity: string[];
   colorIndicator?: string[];
   colors: string[];
-  convertedManaCost: number;
   count: number;
   defense?: string;
   duelDeck?: string;
   edhrecRank?: number;
   edhrecSaltiness?: number;
-  faceConvertedManaCost?: number;
   faceFlavorName?: string;
   faceManaValue?: number;
   faceName?: string;
@@ -146,12 +142,10 @@ export type CardSet = {
   colorIdentity: string[];
   colorIndicator?: string[];
   colors: string[];
-  convertedManaCost: number;
   defense?: string;
   duelDeck?: string;
   edhrecRank?: number;
   edhrecSaltiness?: number;
-  faceConvertedManaCost?: number;
   faceFlavorName?: string;
   faceManaValue?: number;
   faceName?: string;
@@ -342,6 +336,7 @@ export type DeckBoards<TCard = DeckCard, TToken = DeckToken> = {
 export type PreconDeck = DeckBoards & {
 	uuid: string;
 	setCode: string | null;
+	setName: string | null;
 	name: string;
 	source: string;
 	type: string;
@@ -351,6 +346,30 @@ export type PreconDeck = DeckBoards & {
 	stats: DeckStats | null;
 	createdAt: string | null;
 	updatedAt: string | null;
+};
+
+/**
+ * Lightweight deck row for list-scale queries. Carries all set_decks columns plus
+ * precomputed per-board totals and a cover art scryfallId so list UIs can render
+ * covers and counts without hydrating every card.
+ */
+export type DeckSummary = {
+	uuid: string;
+	setCode: string | null;
+	setName: string | null;
+	name: string;
+	source: string;
+	type: string;
+	description: string | null;
+	releaseDate: string;
+	sealedProductUuids: string[] | null;
+	stats: DeckStats | null;
+	createdAt: string | null;
+	updatedAt: string | null;
+	commanderCount: number;
+	mainBoardCount: number;
+	sideBoardCount: number;
+	coverScryfallId: string | null;
 };
 
 export type ForeignData = { faceName?: string; flavorText?: string; identifiers: Identifiers; language: string; name: string; text?: string; type?: string; uuid: string };
@@ -463,6 +482,19 @@ export type TcgplayerSkus = { condition: string; finish: string; language: strin
 export type TokenProducts = { identifiers: Identifiers; purchaseUrls: PurchaseUrls; tokenParts: CardToken[] };
 export type Translations = { "Chinese Simplified"?: string;  "Ancient Greek"?: string;   Arabic?: string;  French?: string;     German?: string;    Hebrew?: string;   Italian?: string;  Japanese?: string;
                              "Chinese Traditional"?: string;  Korean?: string;           Latin?: string;   Phyrexian?: string;  Russian?: string;   Sanskrit?: string; Spanish?: string;  "Portuguese (Brazil)"?: string; };
+
+/** A collection_items row (item_type='card') hydrated with full card data from v_cards. */
+export type CollectionItemCard = CardSet & {
+  itemUuid: string;
+  itemCollectionId: string;
+  quantity: number;
+  itemFinish: string | null;
+  itemCondition: string | null;
+  locationUuid: string | null;
+  itemLanguage: string | null;
+  addedAt: string;
+  itemUpdatedAt: string;
+};
 
 export type Meta = { date: string; version: string };
 export type AllPrintingsFile = { meta: Meta; data: Record<string, Set> };

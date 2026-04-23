@@ -50,6 +50,36 @@ async function fetchJson<T>(url: string, timeout = 60_000): Promise<T> {
 	});
 }
 
+// ── Materialized view refresh ─────────────────────────────────────────────────
+
+/**
+ * Materialized views that hold the denormalized read model used by the SDK's
+ * read API (`sdk.cards.search`, `sdk.collections.*`, etc.). Base-table writes
+ * from `seedDatabase`, `seedSingleSet`, and `applySetUpdates` are invisible to
+ * those reads until these views are refreshed.
+ *
+ * Each view has a unique index on `uuid`, which makes `REFRESH ... CONCURRENTLY`
+ * safe (in-flight reads stay unblocked).
+ */
+const MATERIALIZED_VIEWS = ["v_cards", "v_tokens", "v_cards_combined"] as const;
+
+/**
+ * Refresh every materialized view the SDK reads from. Call this after any bulk
+ * write path that doesn't refresh on its own (for example, after a direct
+ * `seedSingleSet` outside of `applySetUpdates`, or after manual schema repair).
+ *
+ * `applySetUpdates` already invokes this at the end of a successful run, so
+ * callers who only use the high-level update API don't need to call it directly.
+ */
+export async function refreshMaterializedViews(connectionUrl: string): Promise<void> {
+	const db = (await import("postgres")).default(connectionUrl, { max: 1 });
+	try {
+		for (const view of MATERIALIZED_VIEWS) {
+			await db.unsafe(`REFRESH MATERIALIZED VIEW CONCURRENTLY ${view}`);
+		}
+	} finally { await db.end(); }
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
@@ -210,8 +240,13 @@ export async function applySetUpdates(
 
 		const { cards, tokens } = await seedSingleSet(connectionUrl, response.data);
 
-		// If set has tokenSetCode, fetch and seed the token set
-		if (response.data.tokenSetCode) {
+		// Many sets (e.g. TSOC/TSOS) ship their tokens inline in the parent set's `tokens` array
+		// rather than as a standalone token-set JSON file. In that case seedSingleSet above has
+		// already inserted the tokens plus the stub sets row for tokenSetCode, and there is no
+		// separate `{tokenSetCode}.json` on the CDN to fetch. Only fetch the separate token set
+		// file when the parent didn't carry tokens inline.
+		const inlineTokenCount = Array.isArray(response.data.tokens) ? response.data.tokens.length : 0;
+		if (response.data.tokenSetCode && inlineTokenCount === 0) {
 			try {
 				const tokenSetResp = await fetchJson<{ meta: Record<string, string>; data: MTGSet }>(`${CDN_BASE}/${response.data.tokenSetCode}.json`, timeout);
 				const tokenSetName = tokenSetResp.data.name ?? response.data.tokenSetCode;
@@ -223,6 +258,11 @@ export async function applySetUpdates(
 			} catch (err) {
 				console.warn(`Failed to fetch or seed token set ${response.data.tokenSetCode}:`, err);
 			}
+		} else if (response.data.tokenSetCode && inlineTokenCount > 0) {
+			// Tokens were inline; account for them in the totals and tracking arrays.
+			totalTokens += inlineTokenCount;
+			if (entry.isUpdate) { updatedSets.push(response.data.tokenSetCode); }
+			else { addedSets.push(response.data.tokenSetCode); }
 		}
 
 		if (entry.isUpdate) { updatedSets.push(entry.code); }
@@ -231,6 +271,9 @@ export async function applySetUpdates(
 
 		onProgress?.({ setCode: entry.code, setName, done: i + 1, total: allEntries.length, cards, tokens });
 	}
+
+	// Read API queries materialized views; base-table writes above need a view refresh to surface.
+	await refreshMaterializedViews(connectionUrl);
 
 	return { addedSets, updatedSets, totalCards, totalTokens };
 }
