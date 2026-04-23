@@ -1,10 +1,18 @@
--- MTGJSON SDK - Pricing Schema
+-- MTGJSON SDK - Pricing Schema (Apache 2 Timescale only)
 --
 -- Kept separate from schema.sql because:
 --   1. schema.sql drops/recreates on every seed; pricing data is long-lived.
 --   2. TimescaleDB is required only for pricing, not the rest of the SDK.
---   3. Pricing migrations land here additively (every statement is IF NOT EXISTS
---      / CREATE OR REPLACE) so this file can be re-applied safely.
+--   3. This file is re-runnable: every statement is IF NOT EXISTS / CREATE OR REPLACE.
+--
+-- Compatibility: Apache 2 features only. No compression, no continuous
+-- aggregates, no Timescale policies, no TSL-only functions (first/last/etc).
+-- This keeps the schema portable between local Timescale Community builds and
+-- managed hosts that only ship the Apache 2 surface (e.g. Render Postgres).
+--
+-- Rollup refresh is an EXTERNAL responsibility. prices_weekly / prices_monthly
+-- are plain materialized views; the ingest tick (SDK updatePricingToday) runs
+-- REFRESH MATERIALIZED VIEW CONCURRENTLY at the end of each run.
 --
 -- Apply with:  psql $DATABASE_URL -f pricing-schema.sql
 -- Or via SDK:  sdk.ensurePricingSchema()
@@ -97,7 +105,7 @@ $$;
 -- ============================================================
 -- prices_daily  (TimescaleDB hypertable, change-only)
 --
--- One row per (uuid, dims, effective_date) PRICE CHANGE — not per day.
+-- One row per (uuid, dims, effective_date) PRICE CHANGE - not per day.
 -- A row says: "on effective_date, the price for this combo became X,
 -- and holds until the next row (or present) for this combo."
 -- ============================================================
@@ -117,18 +125,6 @@ SELECT create_hypertable(
     chunk_time_interval => INTERVAL '30 days',
     if_not_exists       => TRUE
 );
-
--- Compression on older chunks. segmentby=uuid means each UUID's time-series
--- is stored together — adjacent values for the same UUID compress strongly
--- via dictionary encoding.
-ALTER TABLE prices_daily SET (
-    timescaledb.compress,
-    timescaledb.compress_segmentby = 'uuid',
-    timescaledb.compress_orderby   = 'effective_date DESC'
-);
-
--- Compress chunks older than 14 days.
-SELECT add_compression_policy('prices_daily', INTERVAL '14 days', if_not_exists => TRUE);
 
 -- ============================================================
 -- prices_current  (latest-row cache for card-list batch reads)
@@ -167,60 +163,45 @@ CREATE TRIGGER trg_prices_current_upsert
     EXECUTE FUNCTION prices_current_upsert();
 
 -- ============================================================
--- prices_weekly  (continuous aggregate)
+-- prices_weekly  (plain materialized view)
 --
--- Weekly OHLC + avg per (uuid, dims). Auto-maintained by TimescaleDB.
--- Serves chart queries spanning more than ~90 days.
+-- Weekly rollup per (uuid, dims). Refreshed by the ingest tick via
+-- REFRESH MATERIALIZED VIEW CONCURRENTLY; the unique index below is
+-- what enables CONCURRENTLY.
 -- ============================================================
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS prices_weekly
-WITH (timescaledb.continuous) AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS prices_weekly AS
 SELECT
-    time_bucket('1 week', effective_date)      AS week_start,
     uuid,
     dims,
-    first(price, effective_date)               AS open_price,
-    last(price, effective_date)                AS close_price,
-    min(price)                                 AS min_price,
-    max(price)                                 AS max_price,
-    avg(price)::NUMERIC(10,4)                  AS avg_price,
-    count(*)::INT                              AS change_count
+    time_bucket('1 week', effective_date) AS bucket,
+    avg(price)::NUMERIC(10,4)             AS avg_price,
+    min(price)                            AS min_price,
+    max(price)                            AS max_price
 FROM prices_daily
-GROUP BY week_start, uuid, dims
+GROUP BY uuid, dims, bucket
 WITH NO DATA;
 
-SELECT add_continuous_aggregate_policy(
-    'prices_weekly',
-    start_offset => INTERVAL '90 days',
-    end_offset   => INTERVAL '1 day',
-    schedule_interval => INTERVAL '1 day',
-    if_not_exists => TRUE);
+CREATE UNIQUE INDEX IF NOT EXISTS prices_weekly_key
+    ON prices_weekly (uuid, dims, bucket);
 
 -- ============================================================
--- prices_monthly  (continuous aggregate)
+-- prices_monthly  (plain materialized view)
 --
--- Monthly rollup. Serves multi-year chart ranges at trivial cost.
+-- Monthly rollup per (uuid, dims). Refresh cadence same as prices_weekly.
 -- ============================================================
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS prices_monthly
-WITH (timescaledb.continuous) AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS prices_monthly AS
 SELECT
-    time_bucket('1 month', effective_date)     AS month_start,
     uuid,
     dims,
-    first(price, effective_date)               AS open_price,
-    last(price, effective_date)                AS close_price,
-    min(price)                                 AS min_price,
-    max(price)                                 AS max_price,
-    avg(price)::NUMERIC(10,4)                  AS avg_price,
-    count(*)::INT                              AS change_count
+    time_bucket('1 month', effective_date) AS bucket,
+    avg(price)::NUMERIC(10,4)              AS avg_price,
+    min(price)                             AS min_price,
+    max(price)                             AS max_price
 FROM prices_daily
-GROUP BY month_start, uuid, dims
+GROUP BY uuid, dims, bucket
 WITH NO DATA;
 
-SELECT add_continuous_aggregate_policy(
-    'prices_monthly',
-    start_offset => INTERVAL '2 years',
-    end_offset   => INTERVAL '1 day',
-    schedule_interval => INTERVAL '1 day',
-    if_not_exists => TRUE);
+CREATE UNIQUE INDEX IF NOT EXISTS prices_monthly_key
+    ON prices_monthly (uuid, dims, bucket);

@@ -241,6 +241,15 @@ export async function updatePricingToday(	connectionUrl: string, options?: Updat
 			rowsInserted += inserted;
 			rowsSkipped += buffer.length - inserted;
 		}
+
+		// Keep rollup matviews current. CONCURRENTLY is the nominal path
+		// (both MVs carry a unique index on (uuid, dims, bucket)), but a MV
+		// created WITH NO DATA rejects CONCURRENTLY on its first refresh, so
+		// seed non-concurrently until relispopulated flips true. Plain MVs
+		// are used here instead of continuous aggregates to stay Apache-2
+		// compatible on managed hosts that don't ship the TSL extension.
+		await refreshRollup(db, "prices_weekly");
+		await refreshRollup(db, "prices_monthly");
 	} finally {
 		await db.end();
 	}
@@ -249,6 +258,14 @@ export async function updatePricingToday(	connectionUrl: string, options?: Updat
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+// biome-ignore lint/suspicious/noExplicitAny: postgres.js client type varies across templated/unsafe paths.
+async function refreshRollup(db: any, name: string): Promise<void> {
+	const rows = await db`SELECT relispopulated FROM pg_class WHERE relname = ${name} AND relkind = 'm'` as Array<{ relispopulated: boolean }>;
+	const populated = rows[0]?.relispopulated ?? false;
+	const mode = populated ? "CONCURRENTLY " : "";
+	await db.unsafe(`REFRESH MATERIALIZED VIEW ${mode}${name}`);
+}
 
 async function readMetaDate(jsonPath: string): Promise<string> {
 	const pipeline = chain([ createReadStream(jsonPath), parser(), new Pick({ filter: "meta" }),	new StreamObject() ]);

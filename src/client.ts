@@ -144,7 +144,7 @@ export class MtgjsonSDK {
 		finally { await pg.end(); }
 	}
 
-	/** Ensure the pricing schema (tables, hypertable, continuous aggregates, trigger) is applied. Safe to call repeatedly. */
+	/** Ensure the pricing schema (tables, hypertable, rollup matviews, trigger) is applied. Safe to call repeatedly. */
 	async ensurePricingSchema(): Promise<void> { return ensurePricingSchema(this._connectionUrl); }
 
 	/**

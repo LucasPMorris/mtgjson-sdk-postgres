@@ -7,8 +7,9 @@ import { collated } from "./_sort-helpers.js";
  *
  *   prices_current  - latest price per (uuid, dims). Hot path for card lists.
  *   prices_daily    - change-only history hypertable. Serves card-detail charts.
- *   prices_weekly   - continuous aggregate. Serves multi-month ranges cheaply.
- *   prices_monthly  - continuous aggregate. Serves multi-year ranges.
+ *   prices_weekly   - plain materialized view (bucket, avg/min/max price).
+ *                     Refreshed at the end of each ingest tick.
+ *   prices_monthly  - plain materialized view, same shape, monthly bucket.
  *
  * `dims` is a bit-packed SMALLINT (see pack_dims_ints in pricing-schema.sql);
  * we unpack it in JS rather than calling unpack_dims() per row.
@@ -100,9 +101,9 @@ export class PriceQuery {
 	 * Full price history for one card. Routes to daily / weekly / monthly
 	 * depending on the requested resolution.
 	 *
-	 *   resolution 'daily'   → prices_daily  (change-only rows, exact)
-	 *   resolution 'weekly'  → prices_weekly (OHLC per week, close_price returned)
-	 *   resolution 'monthly' → prices_monthly
+	 *   resolution 'daily'   → prices_daily   (change-only rows, exact)
+	 *   resolution 'weekly'  → prices_weekly  (plain MV, avg per week)
+	 *   resolution 'monthly' → prices_monthly (plain MV, avg per month)
 	 *
 	 * Defaults to daily when omitted. Grouped by dims so the caller gets one
 	 * series per (provider, format, finish, priceType).
@@ -110,10 +111,10 @@ export class PriceQuery {
 	async getPriceHistory(uuid: string, options?: { resolution?: "daily" | "weekly" | "monthly"; dateFrom?: string; dateTo?: string; filter?: DimsFilter; }): Promise<HistoryRow[]> {
 		const resolution = options?.resolution ?? "daily";
 		const { table, dateCol, priceCol } = resolution === "weekly"
-			? { table: "prices_weekly", dateCol: "week_start", priceCol: "close_price" }
+			? { table: "prices_weekly",  dateCol: "bucket",         priceCol: "avg_price" }
 			: resolution === "monthly"
-				? { table: "prices_monthly", dateCol: "month_start", priceCol: "close_price" }
-				: { table: "prices_daily", dateCol: "effective_date", priceCol: "price" };
+				? { table: "prices_monthly", dateCol: "bucket",         priceCol: "avg_price" }
+				: { table: "prices_daily",   dateCol: "effective_date", priceCol: "price"     };
 
 		const parts = [`SELECT dims, ${dateCol} AS bucket, ${priceCol} AS price FROM ${table} WHERE uuid = $1::uuid`];
 		const params: unknown[] = [uuid];
