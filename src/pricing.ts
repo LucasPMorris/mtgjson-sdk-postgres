@@ -14,6 +14,7 @@
  * (uuid, dims, effective_date).
  */
 import { createReadStream, readFileSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
@@ -26,8 +27,15 @@ import type { PriceFormats } from "./types/index.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export interface UpdatePricingOptions { cacheDir?: string; offline?: boolean; timeout?: number; onProgress?: ProgressCallback; }
+export type IngestProgressCallback = (bytesProcessed: number, totalBytes: number, uuidsProcessed: number) => void;
+
+export interface UpdatePricingOptions { cacheDir?: string; offline?: boolean; timeout?: number; onProgress?: ProgressCallback; onIngestProgress?: IngestProgressCallback; }
 export interface UpdatePricingResult { uuidsProcessed: number; rowsInserted: number; rowsSkipped: number; }
+
+// Minimum ms between onIngestProgress fires. Ingestion emits one entry per UUID
+// (~500k) so a naive per-entry callback would hammer the consumer; throttling
+// keeps render work under 5% of wall clock even for trivial callbacks.
+const PROGRESS_THROTTLE_MS = 200;
 
 // ── Dimension encoding (mirrors pack_dims_ints in pricing-schema.sql) ─────────
 
@@ -152,6 +160,7 @@ export async function updatePricingFull( connectionUrl: string,	options?: Update
 	const cache = new CacheManager({ cacheDir: options?.cacheDir,	offline: options?.offline, timeout: options?.timeout,	onProgress: options?.onProgress });
 	await cache.init();
 	const jsonPath = await cache.ensureJson("all_prices");
+	const totalBytes = (await stat(jsonPath)).size;
 
 	const db = postgres(connectionUrl);
 	let uuidsProcessed = 0;
@@ -159,11 +168,20 @@ export async function updatePricingFull( connectionUrl: string,	options?: Update
 	let rowsSkipped = 0;
 
 	try {
-		const pipeline = chain([ createReadStream(jsonPath),	parser(), new Pick({ filter: "data" }), new StreamObject() ]);
+		const readStream = createReadStream(jsonPath);
+		const pipeline = chain([ readStream, parser(), new Pick({ filter: "data" }), new StreamObject() ]);
 
+		let lastProgressFire = 0;
 		let buffer: ChangeRow[] = [];
 		for await (const entry of pipeline as AsyncIterable<{ key: string; value: PriceFormats }>) {
 			uuidsProcessed++;
+			if (options?.onIngestProgress) {
+				const now = Date.now();
+				if (now - lastProgressFire >= PROGRESS_THROTTLE_MS) {
+					options.onIngestProgress(readStream.bytesRead, totalBytes, uuidsProcessed);
+					lastProgressFire = now;
+				}
+			}
 			for (const row of enumerateChangeRows(entry.key, entry.value)) {
 				buffer.push(row);
 				if (buffer.length >= BATCH_SIZE) {
@@ -179,6 +197,7 @@ export async function updatePricingFull( connectionUrl: string,	options?: Update
 			rowsInserted += inserted;
 			rowsSkipped += buffer.length - inserted;
 		}
+		if (options?.onIngestProgress) options.onIngestProgress(totalBytes, totalBytes, uuidsProcessed);
 	} finally {	await db.end(); }
 
 	return { uuidsProcessed, rowsInserted, rowsSkipped };
@@ -191,13 +210,13 @@ export async function updatePricingFull( connectionUrl: string,	options?: Update
  * and inserts into prices_daily only for combos whose price changed (or is new).
  * Flat-day combos are skipped entirely — no wasted writes.
  */
-export async function updatePricingToday(	connectionUrl: string, options?: UpdatePricingOptions,
-): Promise<UpdatePricingResult> { await ensurePricingSchema(connectionUrl);
+export async function updatePricingToday(	connectionUrl: string, options?: UpdatePricingOptions ): Promise<UpdatePricingResult> { await ensurePricingSchema(connectionUrl);
 
 	const cache = new CacheManager({ cacheDir: options?.cacheDir, offline: options?.offline, timeout: options?.timeout, onProgress: options?.onProgress });
 	await cache.init();
 	cache.invalidateMemoryCache();
 	const jsonPath = await cache.ensureJson("all_prices_today");
+	const totalBytes = (await stat(jsonPath)).size;
 
 	// The "today" date is whatever MTGJSON has published — read it from the meta block.
 	// We stream-parse the meta first, then the data block, to avoid loading the whole file.
@@ -215,11 +234,20 @@ export async function updatePricingToday(	connectionUrl: string, options?: Updat
 		const currentRows = await db`SELECT uuid::text AS uuid, dims, price FROM prices_current` as Array<{ uuid: string; dims: number; price: string }>;
 		for (const r of currentRows) { currentMap.set(`${r.uuid}:${r.dims}`, Number(r.price)); }
 
-		const pipeline = chain([ createReadStream(jsonPath), parser(), new Pick({ filter: "data" }), new StreamObject() ]);
+		const readStream = createReadStream(jsonPath);
+		const pipeline = chain([ readStream, parser(), new Pick({ filter: "data" }), new StreamObject() ]);
 
+		let lastProgressFire = 0;
 		let buffer: ChangeRow[] = [];
 		for await (const entry of pipeline as AsyncIterable<{ key: string; value: PriceFormats }>) {
 			uuidsProcessed++;
+			if (options?.onIngestProgress) {
+				const now = Date.now();
+				if (now - lastProgressFire >= PROGRESS_THROTTLE_MS) {
+					options.onIngestProgress(readStream.bytesRead, totalBytes, uuidsProcessed);
+					lastProgressFire = now;
+				}
+			}
 			for (const row of enumerateTodayRows(entry.key, entry.value, todayDate)) {
 				const key = `${row.uuid}:${row.dims}`;
 				const previous = currentMap.get(key);
@@ -241,6 +269,7 @@ export async function updatePricingToday(	connectionUrl: string, options?: Updat
 			rowsInserted += inserted;
 			rowsSkipped += buffer.length - inserted;
 		}
+		if (options?.onIngestProgress) options.onIngestProgress(totalBytes, totalBytes, uuidsProcessed);
 
 		// Keep rollup matviews current. CONCURRENTLY is the nominal path
 		// (both MVs carry a unique index on (uuid, dims, bucket)), but a MV

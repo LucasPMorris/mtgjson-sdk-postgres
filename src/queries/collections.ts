@@ -1,7 +1,7 @@
 import type { Connection } from "../connection.js";
 import { SQLBuilder } from "../sql-builder.js";
 import type { CollectionItemCard } from "../types/index.js";
-import { applyCardFilters, applyCardSort, SORT_FIELD_MAP, type SearchOptions, type SortDirection } from "./_card-filters.js";
+import { applyCardFilters, applyCardSort, SORT_FIELD_MAP, type SearchOptions, type SortDirection, type SortField } from "./_card-filters.js";
 import { collated } from "./_sort-helpers.js";
 import { liftRow } from "./_lift.js";
 
@@ -9,8 +9,10 @@ import { liftRow } from "./_lift.js";
 // Collection-specific sort fields (mapped to collection_items columns)
 // ---------------------------------------------------------------------------
 
-export type CollectionSortField = "name" | "manaValue" | "power" | "toughness" | "number" | "set"
-	| "quantity" | "itemCondition" | "itemLanguage" | "itemFinish";
+// Card-level sort fields (priceTcgplayer / priceCardkingdom included) inherited from SortField,
+// extended with collection-item-level fields (quantity, itemCondition, itemLanguage, itemFinish).
+// Card sorts are delegated to applyCardSort, which adds the prices_current LEFT JOIN when needed.
+export type CollectionSortField = SortField | "quantity" | "itemCondition" | "itemLanguage" | "itemFinish";
 export type CollectionSortOption = CollectionSortField | `${CollectionSortField}:${SortDirection}`;
 
 const COLLECTION_SORT_FIELD_MAP: Record<string, { column: string; table: "ci" }> = {

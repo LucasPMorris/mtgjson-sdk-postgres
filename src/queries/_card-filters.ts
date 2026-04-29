@@ -6,18 +6,71 @@ export const KNOWN_FORMATS = new Set([ "alchemy",   "brawl",   "commander",     
 
 type KeywordOperator = "All" | "Any" | "Exact";
 
-export type SortField = "name" | "manaValue" | "power" | "toughness" | "number" | "set";
+// Columns that legitimately differ across card faces (front/back). When a filter targets one of these,
+// the WHERE fragment is wrapped so it also matches via OR-EXISTS across the row's other_face_ids.
+// `:` is included in the lookbehind so type casts like `$1::text[]` are not rewritten.
+const FACE_AWARE_COLUMNS = ["subtypes", "supertypes", "types", "type", "power", "toughness", "mana_value", "colors", "color_identity", "text", "keywords", "artist"] as const;
+function faceSensitive(fragment: string): string {
+	let aliased = fragment;
+	for (const col of FACE_AWARE_COLUMNS) { aliased = aliased.replace(new RegExp(`(?<![\\w.:])${col}\\b`, "g"), `c2.${col}`); }
+	return `(${fragment} OR EXISTS (SELECT 1 FROM v_cards c2 WHERE c2.uuid = ANY(other_face_ids) AND ${aliased}))`;
+}
+
+export type SortField = "name" | "manaValue" | "power" | "toughness" | "number" | "set" | "priceTcgplayer" | "priceCardkingdom";
 export type SortDirection = "ASC" | "DESC";
 export type SortOption = SortField | `${SortField}:${SortDirection}`;
 
-export const SORT_FIELD_MAP: Record<SortField, { column: string; numeric?: boolean; text?: boolean }> = {
-	name:      { column: "name",     text: true },
-	manaValue: { column: "mana_value" },
-	power:     { column: "power",    numeric: true },
-	toughness: { column: "toughness", numeric: true },
-	number:    { column: "number",   text: true },
-	set:       { column: "set_code", text: true },
+// Price-sort dims per finish: provider_id (bits 4..6) | format=paper(0) | finish (bits 1..2) | price_type=retail(0).
+// See `scripts/pricing-schema.sql` pack_dims for the encoding contract. Provider ids: cardhoarder=0,
+// cardkingdom=1, cardmarket=2, cardsphere=3, tcgplayer=4. Finish codes: normal=0, foil=1, etched=2.
+// Three rows per (uuid, provider) are JOINed below so the sort can fall back through normal → foil
+// → etched (matching the client-side pickPrice precedence). Foil-only / etched-only printings then
+// rank by their available finish instead of sorting to NULLS LAST.
+const dimsFor = (providerId: number, finishCode: number) => (providerId << 4) | (finishCode << 1);
+const PRICE_DIMS_TCGPLAYER   = { normal: dimsFor(4, 0), foil: dimsFor(4, 1), etched: dimsFor(4, 2) }; // 64, 66, 68
+const PRICE_DIMS_CARDKINGDOM = { normal: dimsFor(1, 0), foil: dimsFor(1, 1), etched: dimsFor(1, 2) }; // 16, 18, 20
+
+type PriceJoinSpec = { aliasBase: string; dimsByFinish: { normal: number; foil: number; etched: number } };
+type SortFieldDef = { column: string; numeric?: boolean; text?: boolean; priceJoin?: PriceJoinSpec };
+
+export const SORT_FIELD_MAP: Record<SortField, SortFieldDef> = {
+	name:             { column: "name",     text: true },
+	manaValue:        { column: "mana_value" },
+	power:            { column: "power",    numeric: true },
+	toughness:        { column: "toughness", numeric: true },
+	number:           { column: "number",   text: true },
+	set:              { column: "set_code", text: true },
+	priceTcgplayer:   { column: "price",    priceJoin: { aliasBase: "pc_tcg", dimsByFinish: PRICE_DIMS_TCGPLAYER   } },
+	priceCardkingdom: { column: "price",    priceJoin: { aliasBase: "pc_ck",  dimsByFinish: PRICE_DIMS_CARDKINGDOM } },
 };
+
+export type PriceProvider = "tcgplayer" | "cardkingdom";
+const PRICE_PROVIDER_MAP: Record<PriceProvider, PriceJoinSpec> = {
+	tcgplayer:   { aliasBase: "pc_tcg", dimsByFinish: PRICE_DIMS_TCGPLAYER   },
+	cardkingdom: { aliasBase: "pc_ck",  dimsByFinish: PRICE_DIMS_CARDKINGDOM },
+};
+
+/** Idempotently add the three (normal/foil/etched) prices_current LEFT JOINs for a provider.
+ *  Filter and sort share the same alias bases via a Set stashed on the SQLBuilder so applying
+ *  a price filter and a price sort on the same provider does not collide on alias names.
+ *  Scopes SELECT to `${table}.*` so the joined `prices_current.uuid` columns do not shadow the
+ *  card's `uuid` (driver returns the last-seen column by name, which is NULL for cards without
+ *  an etched price - that is what produced duplicate React keys when the bare `SELECT *` ran). */
+function ensurePriceJoins(q: SQLBuilder, table: string, spec: PriceJoinSpec): void {
+	const qx = q as unknown as { _priceJoinsAdded?: Set<string>; _select: string[] };
+	const joined = qx._priceJoinsAdded ?? (qx._priceJoinsAdded = new Set<string>());
+	if (joined.has(spec.aliasBase)) return;
+	const { aliasBase, dimsByFinish } = spec;
+	// Scope SELECT only when it is the default wildcard. The joined `prices_current.uuid` columns
+	// would otherwise shadow the card's `uuid` under `SELECT *` (driver returns the last-seen column
+	// by name, NULL for cards without an etched price - which produced duplicate React keys). Skip
+	// the rewrite for explicit selects like `COUNT(*)` so count() queries are not corrupted.
+	if (qx._select.length === 1 && qx._select[0] === "*") q.select(`${table}.*`);
+	q.join(`LEFT JOIN prices_current ${aliasBase}_n ON ${aliasBase}_n.uuid::text = ${table}.uuid AND ${aliasBase}_n.dims = ${dimsByFinish.normal}`);
+	q.join(`LEFT JOIN prices_current ${aliasBase}_f ON ${aliasBase}_f.uuid::text = ${table}.uuid AND ${aliasBase}_f.dims = ${dimsByFinish.foil}`);
+	q.join(`LEFT JOIN prices_current ${aliasBase}_e ON ${aliasBase}_e.uuid::text = ${table}.uuid AND ${aliasBase}_e.dims = ${dimsByFinish.etched}`);
+	joined.add(aliasBase);
+}
 
 export type SearchOptions = {
 	artist?: string[];
@@ -51,6 +104,12 @@ export type SearchOptions = {
 	powerLte?: number;
 	powerGt?: number;
 	powerLt?: number;
+	price?: number;
+	priceGte?: number;
+	priceLte?: number;
+	priceGt?: number;
+	priceLt?: number;
+	priceProvider?: PriceProvider;
   rarity?: string | string[];
 	rollupVariations?: boolean;
   setCode?: string | string[];
@@ -74,20 +133,21 @@ function applyKeywordFilter(q: SQLBuilder, keywords: string[], op: KeywordOperat
 		const parts = keywords.map(kw => {
 			const idx = q._params.length + 1;
 			q._params.push(kw);
-			return `$${idx} = ANY(keywords)`;
+			return faceSensitive(`$${idx} = ANY(keywords)`);
 		});
 		q._where.push(`(${parts.join(" OR ")})`);
 	} else if (op === "All") {
+		// Each keyword may be satisfied by either face; the union-of-faces semantic is desired (Trample on side a + Flying on side b matches).
 		for (const kw of keywords) {
 			const idx = q._params.length + 1;
 			q._params.push(kw);
-			q._where.push(`$${idx} = ANY(keywords)`);
+			q._where.push(faceSensitive(`$${idx} = ANY(keywords)`));
 		}
 	} else {
-		// Exact: keywords array must contain exactly the specified values
+		// Exact: any single face's keywords array must equal the specified set exactly.
 		const idx = q._params.length + 1;
 		q._params.push(keywords);
-		q._where.push(`keywords @> $${idx}::text[] AND keywords <@ $${idx}::text[]`);
+		q._where.push(faceSensitive(`keywords @> $${idx}::text[] AND keywords <@ $${idx}::text[]`));
 	}
 }
 
@@ -102,42 +162,61 @@ export function applyCardFilters(q: SQLBuilder, opts: SearchOptions, table = "v_
 
 	if (opts.setCode) Array.isArray(opts.setCode) ? q.whereIn("set_code", opts.setCode) : q.whereEq("set_code", opts.setCode);
 	if (opts.rarity) Array.isArray(opts.rarity) ? q.whereIn("rarity", opts.rarity) : q.whereEq("rarity", opts.rarity);
-	if (opts.manaValue !== undefined) q.whereEq("mana_value", opts.manaValue);
-	if (opts.manaValueLte !== undefined) q.whereLte("mana_value", opts.manaValueLte);
-	if (opts.manaValueGte !== undefined) q.whereGte("mana_value", opts.manaValueGte);
-	if (opts.manaValueLt  !== undefined) q.where("mana_value < $1", opts.manaValueLt);
-	if (opts.manaValueGt  !== undefined) q.where("mana_value > $1", opts.manaValueGt);
-	if (opts.text) q.whereLike("text", `%${opts.text}%`);
-	if (opts.textRegex) q.whereRegex("text", opts.textRegex);
+	if (opts.manaValue    !== undefined) { const i = q._params.length + 1; q._params.push(opts.manaValue);    q._where.push(faceSensitive(`mana_value = $${i}`));  }
+	if (opts.manaValueLte !== undefined) { const i = q._params.length + 1; q._params.push(opts.manaValueLte); q._where.push(faceSensitive(`mana_value <= $${i}`)); }
+	if (opts.manaValueGte !== undefined) { const i = q._params.length + 1; q._params.push(opts.manaValueGte); q._where.push(faceSensitive(`mana_value >= $${i}`)); }
+	if (opts.manaValueLt  !== undefined) { const i = q._params.length + 1; q._params.push(opts.manaValueLt);  q._where.push(faceSensitive(`mana_value < $${i}`));  }
+	if (opts.manaValueGt  !== undefined) { const i = q._params.length + 1; q._params.push(opts.manaValueGt);  q._where.push(faceSensitive(`mana_value > $${i}`));  }
+	if (opts.text)      { const i = q._params.length + 1; q._params.push(`%${opts.text}%`); q._where.push(faceSensitive(`LOWER(text) LIKE LOWER($${i})`)); }
+	if (opts.textRegex) { const i = q._params.length + 1; q._params.push(opts.textRegex);   q._where.push(faceSensitive(`text ~ $${i}`)); }
 	if (opts.types) {
 		const types = Array.isArray(opts.types) ? opts.types : [opts.types];
 		const parts = types.map(t => { const idx = q._params.length + 1; q._params.push(`%${t}%`); return `type ILIKE $${idx}`; });
-		if (parts.length === 1) q._where.push(parts[0]);
-		else q._where.push(`(${parts.join(" OR ")})`);
+		q._where.push(faceSensitive(parts.length === 1 ? parts[0] : `(${parts.join(" OR ")})`));
 	}
 	if (opts.subtype) {
 		const subtypes = Array.isArray(opts.subtype) ? opts.subtype : [opts.subtype];
 		const parts = subtypes.map(s => { const idx = q._params.length + 1; q._params.push(s); return `$${idx} = ANY(subtypes)`; });
-		if (parts.length === 1) q._where.push(parts[0]);
-		else q._where.push(`(${parts.join(" OR ")})`);
+		q._where.push(faceSensitive(parts.length === 1 ? parts[0] : `(${parts.join(" OR ")})`));
 	}
 	if (opts.supertype) {
 		const supertypes = Array.isArray(opts.supertype) ? opts.supertype : [opts.supertype];
 		const parts = supertypes.map(s => { const idx = q._params.length + 1; q._params.push(s); return `$${idx} = ANY(supertypes)`; });
-		if (parts.length === 1) q._where.push(parts[0]);
-		else q._where.push(`(${parts.join(" OR ")})`);
+		q._where.push(faceSensitive(parts.length === 1 ? parts[0] : `(${parts.join(" OR ")})`));
 	}
-	if (opts.power) q.whereEq("power", opts.power);
-	if (opts.powerGte !== undefined) q.where(`power ~ '^-?[0-9]+(\\.[0-9]+)?$' AND power::NUMERIC >= $1`, opts.powerGte);
-	if (opts.powerLte !== undefined) q.where(`power ~ '^-?[0-9]+(\\.[0-9]+)?$' AND power::NUMERIC <= $1`, opts.powerLte);
-	if (opts.powerGt  !== undefined) q.where(`power ~ '^-?[0-9]+(\\.[0-9]+)?$' AND power::NUMERIC > $1`,  opts.powerGt);
-	if (opts.powerLt  !== undefined) q.where(`power ~ '^-?[0-9]+(\\.[0-9]+)?$' AND power::NUMERIC < $1`,  opts.powerLt);
-	if (opts.toughness) q.whereEq("toughness", opts.toughness);
-	if (opts.toughnessGte !== undefined) q.where(`toughness ~ '^-?[0-9]+(\\.[0-9]+)?$' AND toughness::NUMERIC >= $1`, opts.toughnessGte);
-	if (opts.toughnessLte !== undefined) q.where(`toughness ~ '^-?[0-9]+(\\.[0-9]+)?$' AND toughness::NUMERIC <= $1`, opts.toughnessLte);
-	if (opts.toughnessGt  !== undefined) q.where(`toughness ~ '^-?[0-9]+(\\.[0-9]+)?$' AND toughness::NUMERIC > $1`,  opts.toughnessGt);
-	if (opts.toughnessLt  !== undefined) q.where(`toughness ~ '^-?[0-9]+(\\.[0-9]+)?$' AND toughness::NUMERIC < $1`,  opts.toughnessLt);
-	if (opts.artist?.length) q.whereIn("artist", opts.artist);
+	if (opts.power)                      { const i = q._params.length + 1; q._params.push(opts.power);        q._where.push(faceSensitive(`power = $${i}`)); }
+	if (opts.powerGte     !== undefined) { const i = q._params.length + 1; q._params.push(opts.powerGte);     q._where.push(faceSensitive(`power ~ '^-?[0-9]+(\\.[0-9]+)?$' AND power::NUMERIC >= $${i}`)); }
+	if (opts.powerLte     !== undefined) { const i = q._params.length + 1; q._params.push(opts.powerLte);     q._where.push(faceSensitive(`power ~ '^-?[0-9]+(\\.[0-9]+)?$' AND power::NUMERIC <= $${i}`)); }
+	if (opts.powerGt      !== undefined) { const i = q._params.length + 1; q._params.push(opts.powerGt);      q._where.push(faceSensitive(`power ~ '^-?[0-9]+(\\.[0-9]+)?$' AND power::NUMERIC > $${i}`));  }
+	if (opts.powerLt      !== undefined) { const i = q._params.length + 1; q._params.push(opts.powerLt);      q._where.push(faceSensitive(`power ~ '^-?[0-9]+(\\.[0-9]+)?$' AND power::NUMERIC < $${i}`));  }
+	if (opts.toughness)                  { const i = q._params.length + 1; q._params.push(opts.toughness);    q._where.push(faceSensitive(`toughness = $${i}`)); }
+	if (opts.toughnessGte !== undefined) { const i = q._params.length + 1; q._params.push(opts.toughnessGte); q._where.push(faceSensitive(`toughness ~ '^-?[0-9]+(\\.[0-9]+)?$' AND toughness::NUMERIC >= $${i}`)); }
+	if (opts.toughnessLte !== undefined) { const i = q._params.length + 1; q._params.push(opts.toughnessLte); q._where.push(faceSensitive(`toughness ~ '^-?[0-9]+(\\.[0-9]+)?$' AND toughness::NUMERIC <= $${i}`)); }
+	if (opts.toughnessGt  !== undefined) { const i = q._params.length + 1; q._params.push(opts.toughnessGt);  q._where.push(faceSensitive(`toughness ~ '^-?[0-9]+(\\.[0-9]+)?$' AND toughness::NUMERIC > $${i}`));  }
+	if (opts.toughnessLt  !== undefined) { const i = q._params.length + 1; q._params.push(opts.toughnessLt);  q._where.push(faceSensitive(`toughness ~ '^-?[0-9]+(\\.[0-9]+)?$' AND toughness::NUMERIC < $${i}`));  }
+
+	// Price filters compare against COALESCE(normal, foil, etched) for the chosen provider, matching
+	// the same finish-fallback precedence used by the price sort. Cards with no row in any finish for
+	// the provider are excluded (COALESCE is NULL → comparison is NULL → row dropped). When both a
+	// price filter and a price sort target the same provider, ensurePriceJoins dedupes the joins.
+	const priceFilterSet = opts.price !== undefined || opts.priceGte !== undefined || opts.priceLte !== undefined || opts.priceGt !== undefined || opts.priceLt !== undefined;
+	if (priceFilterSet) {
+		const provider: PriceProvider = opts.priceProvider ?? "tcgplayer";
+		const spec = PRICE_PROVIDER_MAP[provider];
+		ensurePriceJoins(q, table, spec);
+		const expr = `COALESCE(${spec.aliasBase}_n.price, ${spec.aliasBase}_f.price, ${spec.aliasBase}_e.price)`;
+		if (opts.price    !== undefined) q.where(`${expr} = $1`,  opts.price);
+		if (opts.priceGte !== undefined) q.where(`${expr} >= $1`, opts.priceGte);
+		if (opts.priceLte !== undefined) q.where(`${expr} <= $1`, opts.priceLte);
+		if (opts.priceGt  !== undefined) q.where(`${expr} > $1`,  opts.priceGt);
+		if (opts.priceLt  !== undefined) q.where(`${expr} < $1`,  opts.priceLt);
+	}
+
+	if (opts.artist?.length) {
+		const placeholders: string[] = [];
+		for (const v of opts.artist) { const i = q._params.length + 1; placeholders.push(`$${i}`); q._params.push(v); }
+		q._where.push(faceSensitive(`artist IN (${placeholders.join(", ")})`));
+	}
 	if (opts.language) q.whereEq("language", opts.language);
 	if (opts.layout) q.whereEq("layout", opts.layout);
 	// Boolean include filters:
@@ -177,13 +256,13 @@ export function applyCardFilters(q: SQLBuilder, opts: SearchOptions, table = "v_
 
 	for (const color of opts.colors ?? []) {
 		const idx = q._params.length + 1;
-		q._where.push(`$${idx} = ANY(colors)`);
 		q._params.push(color);
+		q._where.push(faceSensitive(`$${idx} = ANY(colors)`));
 	}
 	for (const color of opts.colorIdentity ?? []) {
 		const idx = q._params.length + 1;
-		q._where.push(`$${idx} = ANY(color_identity)`);
 		q._params.push(color);
+		q._where.push(faceSensitive(`$${idx} = ANY(color_identity)`));
 	}
 
 	// Keyword filters with operator support
@@ -220,7 +299,13 @@ export function applyCardFilters(q: SQLBuilder, opts: SearchOptions, table = "v_
 	if (opts.rollupVariations)   { q._where.push(`${table}.is_rollup_canonical = TRUE`); }
 }
 
-/** Parse sort options and apply ORDER BY clauses to the query builder. */
+/** Parse sort options and apply ORDER BY clauses to the query builder.
+ *  Price sorts (`priceTcgplayer` / `priceCardkingdom`) LEFT JOIN `prices_current` three times per
+ *  provider (one row per finish: normal/foil/etched) and ORDER BY COALESCE of those joined prices,
+ *  matching the client-side `pickPrice` precedence (normal → foil → etched). Cards with no matching
+ *  row in any finish sort last in either direction. The three joins per provider alias are added
+ *  once even when the same price field is referenced multiple times in the sort list, or when a
+ *  price filter has already added the same provider's joins via applyCardFilters. */
 export function applyCardSort(q: SQLBuilder, sort: SortOption | SortOption[] | undefined, table: string): void {
 	if (!sort) { q.orderBy(`${collated(`${table}.name`)} ASC`, `${collated(`${table}.number`)} ASC`); return;	}
 
@@ -229,8 +314,20 @@ export function applyCardSort(q: SQLBuilder, sort: SortOption | SortOption[] | u
 		const [field, dir = "ASC"] = s.split(":") as [SortField, SortDirection?];
 		const mapping = SORT_FIELD_MAP[field];
 		if (!mapping) continue;
-		const col = `${table}.${mapping.column}`;
 		const direction = dir === "DESC" ? "DESC" : "ASC";
+
+		if (mapping.priceJoin) {
+			// `cards.uuid` (and v_cards / v_cards_combined) is TEXT, while `prices_current.uuid` is
+			// UUID; ensurePriceJoins handles the cast, dedups against any joins already added by
+			// applyCardFilters when filter and sort target the same provider, and scopes SELECT so
+			// the joined `prices_current.uuid` does not shadow the card's `uuid`.
+			ensurePriceJoins(q, table, mapping.priceJoin);
+			const { aliasBase } = mapping.priceJoin;
+			q.orderBy(`COALESCE(${aliasBase}_n.price, ${aliasBase}_f.price, ${aliasBase}_e.price) ${direction} NULLS LAST`);
+			continue;
+		}
+
+		const col = `${table}.${mapping.column}`;
 		if (mapping.numeric) {
 			const nulls = direction === "ASC" ? "LAST" : "FIRST"; // Cast to numeric for proper ordering, push NULLs/non-numeric to the end
 			q.orderBy(`(CASE WHEN ${col} ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ${col}::NUMERIC END) ${direction} NULLS ${nulls}`);
